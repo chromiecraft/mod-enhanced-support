@@ -17,8 +17,10 @@
 
 // Add each script's registrar below, then call it here.
 void AddEnhancedSupportScripts();
+void AddEnhancedSupportCommandScripts();
 
 void Addmod_enhanced_supportScripts()
 {
     AddEnhancedSupportScripts();
+    AddEnhancedSupportCommandScripts();
 }

@@ -42,6 +42,7 @@ All commands live under `.support` and work in-game and from the server console.
 
 | Command                                  | Security      | Description                                                                                  |
 | ---------------------------------------- | ------------- | -------------------------------------------------------------------------------------------- |
+| `.support info`                          | Game Master   | Shows active settings: enabled state, mail filter action, keyword count, ban author, message. |
 | `.support reload`                        | Administrator | Reloads this module's config and keywords, independent of the global `.reload config`.       |
 | `.support keyword add <keyword>`         | Administrator | Adds a blocked keyword (stored lowercased).                                                   |
 | `.support keyword remove <keyword>`      | Administrator | Removes a blocked keyword.                                                                    |
@@ -63,12 +64,14 @@ Examples: `.support keyword add wowgold`, `.support list keywords`,
 ## Layout
 
 - `src/mod_enhanced_support_loader.cpp` — entry point invoked by the core; calls
-  the module's `Add*Scripts` registrar.
-- `src/mod_enhanced_support.cpp` — register your `ScriptObject` subclasses here.
+  the module's `Add*Scripts` registrars.
+- `src/mod_enhanced_support.cpp` — world/player scripts (config cache, mail filter).
+- `src/cs_enhanced_support.cpp` — the `.support` chat commands.
+- `src/EnhancedSupport.h` — shared config/keyword API used by both `.cpp` files.
 - `conf/mod-enhanced-support.conf.dist` — distributed config template.
 - `data/sql/db-auth`, `data/sql/db-world` — `base`/`updates` SQL applied
-  automatically by the module DB updater (the mail keyword table lives in
-  `db-auth/updates`).
+  automatically by the module DB updater. The mail keyword table lives in
+  `db-auth/updates`; the `.support` command help rows in `db-world/updates`.
 
 ## License
 
