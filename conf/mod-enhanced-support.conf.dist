@@ -53,3 +53,34 @@ EnhancedSupport.MailFilter.Message = "Your mail was blocked because it contains 
 #
 
 EnhancedSupport.MailFilter.BanAuthor = "SupportModule"
+
+#
+#    EnhancedSupport.StartupNotice.Enable
+#        Description: Post a Discord notice when the world server has started, showing the
+#                     git revision the server is running. Requires mod-chat-transmitter to
+#                     be installed and enabled (it is the transport). Also gated by
+#                     EnhancedSupport.Enable.
+#        Default:     0 (disabled)
+#                     1 (enabled)
+#
+
+EnhancedSupport.StartupNotice.Enable = 0
+
+#
+#    EnhancedSupport.StartupNotice.Message
+#        Description: Headline shown on the startup Discord notice. The revision, branch and
+#                     build date are appended automatically.
+#        Default:     "Server restarted!"
+#
+
+EnhancedSupport.StartupNotice.Message = "Server restarted!"
+
+#
+#    EnhancedSupport.StartupNotice.DelaySeconds
+#        Description: How long after startup to send the notice. The delay lets the
+#                     mod-chat-transmitter WebSocket come up first. Increase it if your
+#                     Discord bot connection is slow to establish.
+#        Default:     5
+#
+
+EnhancedSupport.StartupNotice.DelaySeconds = 5

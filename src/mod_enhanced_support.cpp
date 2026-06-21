@@ -20,14 +20,17 @@
 #include "Chat.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
+#include "GitRevision.h"
 #include "Log.h"
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "StringFormat.h"
+#include "TaskScheduler.h"
 #include "WorldSession.h"
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 
 // Optional integration: relay blocked-mail events to Discord via mod-chat-transmitter.
 #if __has_include("mod-chat-transmitter/src/ChatTransmitter.h")
@@ -55,6 +58,10 @@ namespace
     std::string _mailFilterMessage;
     std::string _mailFilterBanAuthor;
     std::vector<std::string> _mailFilterKeywords;
+
+    bool _startupNoticeEnabled = false;
+    std::string _startupNoticeMessage;
+    uint32 _startupNoticeDelaySeconds = 5;
 
     std::string ToLowerAscii(std::string_view input)
     {
@@ -186,6 +193,9 @@ namespace EnhancedSupport
         _mailFilterMessage = sConfigMgr->GetOption<std::string>("EnhancedSupport.MailFilter.Message",
             "Your mail was blocked because it contains a prohibited keyword.");
         _mailFilterBanAuthor = sConfigMgr->GetOption<std::string>("EnhancedSupport.MailFilter.BanAuthor", "SupportModule");
+        _startupNoticeEnabled = sConfigMgr->GetOption<bool>("EnhancedSupport.StartupNotice.Enable", false);
+        _startupNoticeMessage = sConfigMgr->GetOption<std::string>("EnhancedSupport.StartupNotice.Message", "Server restarted!");
+        _startupNoticeDelaySeconds = sConfigMgr->GetOption<uint32>("EnhancedSupport.StartupNotice.DelaySeconds", 5);
     }
 }
 
@@ -197,7 +207,8 @@ class EnhancedSupportWorldScript : public WorldScript
 public:
     EnhancedSupportWorldScript() : WorldScript("EnhancedSupportWorldScript", {
         WORLDHOOK_ON_AFTER_CONFIG_LOAD,
-        WORLDHOOK_ON_STARTUP
+        WORLDHOOK_ON_STARTUP,
+        WORLDHOOK_ON_UPDATE
     }) { }
 
     void OnAfterConfigLoad(bool /*reload*/) override
@@ -208,7 +219,44 @@ public:
     void OnStartup() override
     {
         EnhancedSupport::LoadKeywords();
+
+        if (!_enabled || !_startupNoticeEnabled)
+            return;
+
+        // The Discord relay (mod-chat-transmitter) connects its WebSocket on a
+        // background thread during startup, so sending here directly is racy.
+        // Defer a few seconds: by then the relay's client exists and its own
+        // queue buffers the request until the handshake completes.
+        _scheduler.Schedule(std::chrono::seconds(_startupNoticeDelaySeconds), [](TaskContext /*context*/)
+        {
+            SendStartupNotice();
+        });
     }
+
+    void OnUpdate(uint32 diff) override
+    {
+        _scheduler.Update(diff);
+    }
+
+private:
+    static void SendStartupNotice()
+    {
+        // Re-check: an admin may have disabled it via .reload config during the delay.
+        if (!_enabled || !_startupNoticeEnabled)
+            return;
+
+#ifdef HAS_CHAT_TRANSMITTER
+        std::string note = Acore::StringFormat(
+            "🔄 **{}**\n**Revision:** `{}`\n**Branch:** `{}`\n**Built:** {}",
+            _startupNoticeMessage, GitRevision::GetHash(), GitRevision::GetBranch(), GitRevision::GetDate());
+        sChatTransmitter->QueueNotification("ServerStatus", note);
+        LOG_INFO("module.enhancedsupport", "StartupNotice: queued Discord server-start notice (revision {})", GitRevision::GetHash());
+#else
+        LOG_WARN("module.enhancedsupport", "StartupNotice is enabled but mod-chat-transmitter is not available; no Discord notice will be sent.");
+#endif
+    }
+
+    TaskScheduler _scheduler;
 };
 
 // Blocks player-sent mail whose subject/body match a configured keyword.
