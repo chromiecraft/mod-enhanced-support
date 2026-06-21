@@ -23,10 +23,17 @@
 #include "Log.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include "StringFormat.h"
 #include "WorldSession.h"
 
 #include <algorithm>
 #include <cctype>
+
+// Optional integration: relay blocked-mail events to Discord via mod-chat-transmitter.
+#if __has_include("mod-chat-transmitter/src/ChatTransmitter.h")
+#include "mod-chat-transmitter/src/ChatTransmitter.h"
+#define HAS_CHAT_TRANSMITTER 1
+#endif
 
 namespace
 {
@@ -226,6 +233,16 @@ public:
             "MailFilter: blocked mail from {} ({}) to {} - matched keyword '{}', action {} | subject: \"{}\" | body: \"{}\"",
             player->GetName(), player->GetGUID().ToString(), receiverGuid.ToString(), matched,
             static_cast<uint32>(_mailFilterAction), subject, body);
+
+#ifdef HAS_CHAT_TRANSMITTER
+        {
+            std::string note = Acore::StringFormat(
+                "**{}** ({}) blocked - keyword `{}`, action `{}`\nSubject: {}",
+                player->GetName(), player->GetSession()->GetRemoteAddress(), matched,
+                EnhancedSupport::GetMailFilterActionName(), subject);
+            sChatTransmitter->QueueNotification("MailFilter", note);
+        }
+#endif
 
         switch (_mailFilterAction)
         {
