@@ -76,13 +76,13 @@ namespace
         return ToLowerAscii(input);
     }
 
-    // Keywords live in the characters DB (enhanced_support_mail_keywords) and
-    // are cached here so the mail hook never hits the DB on the hot path.
+    // Keywords live in the auth DB (enhanced_support_mail_keywords) and are
+    // cached here so the mail hook never hits the DB on the hot path.
     void LoadMailFilterKeywords()
     {
         _mailFilterKeywords.clear();
 
-        QueryResult result = CharacterDatabase.Query("SELECT keyword FROM enhanced_support_mail_keywords");
+        QueryResult result = LoginDatabase.Query("SELECT keyword FROM enhanced_support_mail_keywords");
         if (!result)
             return;
 
@@ -102,16 +102,16 @@ namespace
     void AddMailFilterKeyword(std::string const& normalized)
     {
         std::string escaped = normalized;
-        CharacterDatabase.EscapeString(escaped);
-        CharacterDatabase.Execute("INSERT IGNORE INTO enhanced_support_mail_keywords (keyword) VALUES ('{}')", escaped);
+        LoginDatabase.EscapeString(escaped);
+        LoginDatabase.Execute("INSERT IGNORE INTO enhanced_support_mail_keywords (keyword) VALUES ('{}')", escaped);
         LoadMailFilterKeywords();
     }
 
     void RemoveMailFilterKeyword(std::string const& normalized)
     {
         std::string escaped = normalized;
-        CharacterDatabase.EscapeString(escaped);
-        CharacterDatabase.Execute("DELETE FROM enhanced_support_mail_keywords WHERE keyword = '{}'", escaped);
+        LoginDatabase.EscapeString(escaped);
+        LoginDatabase.Execute("DELETE FROM enhanced_support_mail_keywords WHERE keyword = '{}'", escaped);
         LoadMailFilterKeywords();
     }
 

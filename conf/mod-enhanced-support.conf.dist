@@ -27,7 +27,7 @@ EnhancedSupport.Enable = 1
 
 EnhancedSupport.MailFilter.Action = 0
 
-# Keywords are stored in the characters DB table `enhanced_support_mail_keywords`,
+# Keywords are stored in the auth DB table `enhanced_support_mail_keywords`,
 # not in this file. Manage them in-game or from the console with:
 #   .support keyword add <keyword>
 #   .support keyword remove <keyword>

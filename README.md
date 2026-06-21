@@ -21,9 +21,10 @@ keyword (case-insensitive substring match). Intended to stop gold-seller and
 scam advertising. Blocked mail (including its subject and body) is logged under
 `module.enhancedsupport`.
 
-Keywords live in the characters DB table `enhanced_support_mail_keywords` and are
+Keywords live in the auth DB table `enhanced_support_mail_keywords` and are
 managed with the `.support keyword` commands below; no rebuild or config edit is
-needed to change them.
+needed to change them. Because the table is in the auth DB, the keyword list is
+shared across all realms.
 
 The `Action` option controls how matches are handled:
 
@@ -65,9 +66,9 @@ Examples: `.support keyword add wowgold`, `.support list keywords`,
   the module's `Add*Scripts` registrar.
 - `src/mod_enhanced_support.cpp` — register your `ScriptObject` subclasses here.
 - `conf/mod-enhanced-support.conf.dist` — distributed config template.
-- `data/sql/db-characters`, `data/sql/db-world` — `base`/`updates` SQL applied
+- `data/sql/db-auth`, `data/sql/db-world` — `base`/`updates` SQL applied
   automatically by the module DB updater (the mail keyword table lives in
-  `db-characters/updates`).
+  `db-auth/updates`).
 
 ## License
 
