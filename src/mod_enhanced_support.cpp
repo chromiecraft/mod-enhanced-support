@@ -24,7 +24,6 @@
 #include "ScriptMgr.h"
 #include "StringFormat.h"
 #include "Timer.h"
-#include "Tokenize.h"
 #include "WorldSession.h"
 
 #include <algorithm>
@@ -65,22 +64,55 @@ namespace
         return out;
     }
 
+    // Trims surrounding whitespace and lowercases, giving the canonical form
+    // used for both storage and matching.
+    std::string NormalizeKeyword(std::string_view input)
+    {
+        while (!input.empty() && std::isspace(static_cast<unsigned char>(input.front())))
+            input.remove_prefix(1);
+        while (!input.empty() && std::isspace(static_cast<unsigned char>(input.back())))
+            input.remove_suffix(1);
+
+        return ToLowerAscii(input);
+    }
+
+    // Keywords live in the characters DB (enhanced_support_mail_keywords) and
+    // are cached here so the mail hook never hits the DB on the hot path.
     void LoadMailFilterKeywords()
     {
         _mailFilterKeywords.clear();
 
-        std::string const raw = sConfigMgr->GetOption<std::string>("EnhancedSupport.MailFilter.Keywords", "");
-        for (std::string_view token : Acore::Tokenize(raw, ',', false))
-        {
-            // Trim surrounding whitespace so "gold, wowgold" works.
-            while (!token.empty() && std::isspace(static_cast<unsigned char>(token.front())))
-                token.remove_prefix(1);
-            while (!token.empty() && std::isspace(static_cast<unsigned char>(token.back())))
-                token.remove_suffix(1);
+        QueryResult result = CharacterDatabase.Query("SELECT keyword FROM enhanced_support_mail_keywords");
+        if (!result)
+            return;
 
-            if (!token.empty())
-                _mailFilterKeywords.push_back(ToLowerAscii(token));
-        }
+        do
+        {
+            std::string keyword = NormalizeKeyword(result->Fetch()[0].Get<std::string>());
+            if (!keyword.empty())
+                _mailFilterKeywords.push_back(keyword);
+        } while (result->NextRow());
+    }
+
+    bool HasMailFilterKeyword(std::string const& normalized)
+    {
+        return std::find(_mailFilterKeywords.begin(), _mailFilterKeywords.end(), normalized) != _mailFilterKeywords.end();
+    }
+
+    void AddMailFilterKeyword(std::string const& normalized)
+    {
+        std::string escaped = normalized;
+        CharacterDatabase.EscapeString(escaped);
+        CharacterDatabase.Execute("INSERT IGNORE INTO enhanced_support_mail_keywords (keyword) VALUES ('{}')", escaped);
+        LoadMailFilterKeywords();
+    }
+
+    void RemoveMailFilterKeyword(std::string const& normalized)
+    {
+        std::string escaped = normalized;
+        CharacterDatabase.EscapeString(escaped);
+        CharacterDatabase.Execute("DELETE FROM enhanced_support_mail_keywords WHERE keyword = '{}'", escaped);
+        LoadMailFilterKeywords();
     }
 
     // Returns the first matching keyword, or empty if the text is clean.
@@ -103,22 +135,28 @@ namespace
         _mailFilterMessage = sConfigMgr->GetOption<std::string>("EnhancedSupport.MailFilter.Message",
             "Your mail was blocked because it contains a prohibited keyword.");
         _mailFilterBanAuthor = sConfigMgr->GetOption<std::string>("EnhancedSupport.MailFilter.BanAuthor", "SupportModule");
-        LoadMailFilterKeywords();
     }
 }
 
 // Reads config once on startup and on .reload config, so hot paths can read the
-// cached value instead of calling sConfigMgr each time.
+// cached value instead of calling sConfigMgr each time. Keywords are loaded from
+// the DB on startup (config load runs before the DB is ready).
 class EnhancedSupportWorldScript : public WorldScript
 {
 public:
     EnhancedSupportWorldScript() : WorldScript("EnhancedSupportWorldScript", {
-        WORLDHOOK_ON_AFTER_CONFIG_LOAD
+        WORLDHOOK_ON_AFTER_CONFIG_LOAD,
+        WORLDHOOK_ON_STARTUP
     }) { }
 
     void OnAfterConfigLoad(bool /*reload*/) override
     {
         LoadEnhancedSupportConfig();
+    }
+
+    void OnStartup() override
+    {
+        LoadMailFilterKeywords();
     }
 };
 
@@ -140,8 +178,10 @@ public:
         if (matched.empty())
             return true;
 
-        LOG_INFO("module.enhancedsupport", "MailFilter: blocked mail from {} ({}) to {} - matched keyword '{}', action {}",
-            player->GetName(), player->GetGUID().ToString(), receiverGuid.ToString(), matched, static_cast<uint32>(_mailFilterAction));
+        LOG_INFO("module.enhancedsupport",
+            "MailFilter: blocked mail from {} ({}) to {} - matched keyword '{}', action {} | subject: \"{}\" | body: \"{}\"",
+            player->GetName(), player->GetGUID().ToString(), receiverGuid.ToString(), matched,
+            static_cast<uint32>(_mailFilterAction), subject, body);
 
         switch (_mailFilterAction)
         {
@@ -175,32 +215,104 @@ public:
 
     ChatCommandTable GetCommands() const override
     {
-        static ChatCommandTable enhancedSupportTable =
+        static ChatCommandTable listTable =
         {
-            { "reload", HandleReloadCommand, SEC_ADMINISTRATOR, Console::Yes },
-            { "bans",   HandleBansCommand,   SEC_GAMEMASTER,    Console::Yes },
+            { "bans",     HandleListBansCommand,     SEC_GAMEMASTER, Console::Yes },
+            { "keywords", HandleListKeywordsCommand, SEC_GAMEMASTER, Console::Yes },
+        };
+
+        static ChatCommandTable keywordTable =
+        {
+            { "add",    HandleKeywordAddCommand,    SEC_ADMINISTRATOR, Console::Yes },
+            { "remove", HandleKeywordRemoveCommand, SEC_ADMINISTRATOR, Console::Yes },
+        };
+
+        static ChatCommandTable supportTable =
+        {
+            { "reload",  HandleReloadCommand, SEC_ADMINISTRATOR, Console::Yes },
+            { "list",    listTable },
+            { "keyword", keywordTable },
         };
 
         static ChatCommandTable commandTable =
         {
-            { "enhancedsupport", enhancedSupportTable },
+            { "support", supportTable },
         };
 
         return commandTable;
     }
 
-    // Re-reads only this module's options from disk, independent of .reload config.
+    // Re-reads this module's options and keywords, independent of .reload config.
     static bool HandleReloadCommand(ChatHandler* handler)
     {
         sConfigMgr->LoadModulesConfigs(true, false);
         LoadEnhancedSupportConfig();
-        handler->PSendSysMessage("mod-enhanced-support: configuration reloaded.");
+        LoadMailFilterKeywords();
+        handler->PSendSysMessage("mod-enhanced-support: configuration and keywords reloaded.");
+        return true;
+    }
+
+    static bool HandleListKeywordsCommand(ChatHandler* handler)
+    {
+        if (_mailFilterKeywords.empty())
+        {
+            handler->SendSysMessage("mod-enhanced-support: no mail keywords configured.");
+            return true;
+        }
+
+        handler->PSendSysMessage("mod-enhanced-support: {} mail keyword(s):", _mailFilterKeywords.size());
+        for (std::string const& keyword : _mailFilterKeywords)
+            handler->PSendSysMessage(" - {}", keyword);
+
+        return true;
+    }
+
+    static bool HandleKeywordAddCommand(ChatHandler* handler, Tail keyword)
+    {
+        std::string normalized = NormalizeKeyword(std::string{ keyword });
+        if (normalized.empty())
+        {
+            handler->SendSysMessage("Usage: .support keyword add <keyword>");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        if (HasMailFilterKeyword(normalized))
+        {
+            handler->PSendSysMessage("Keyword already present: {}", normalized);
+            return true;
+        }
+
+        AddMailFilterKeyword(normalized);
+        handler->PSendSysMessage("Added mail keyword: {}", normalized);
+        return true;
+    }
+
+    static bool HandleKeywordRemoveCommand(ChatHandler* handler, Tail keyword)
+    {
+        std::string normalized = NormalizeKeyword(std::string{ keyword });
+        if (normalized.empty())
+        {
+            handler->SendSysMessage("Usage: .support keyword remove <keyword>");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        if (!HasMailFilterKeyword(normalized))
+        {
+            handler->PSendSysMessage("Keyword not found: {}", normalized);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        RemoveMailFilterKeyword(normalized);
+        handler->PSendSysMessage("Removed mail keyword: {}", normalized);
         return true;
     }
 
     // Lists the most recent account bans, newest first. The author substring defaults
     // to the module's configured ban author, so a bare call shows the module's own bans.
-    static bool HandleBansCommand(ChatHandler* handler, Optional<uint32> count, Tail author)
+    static bool HandleListBansCommand(ChatHandler* handler, Optional<uint32> count, Tail author)
     {
         uint32 limit = count ? *count : 10;
         limit = std::clamp<uint32>(limit, 1, 50);

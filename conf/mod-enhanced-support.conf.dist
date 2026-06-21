@@ -27,16 +27,12 @@ EnhancedSupport.Enable = 1
 
 EnhancedSupport.MailFilter.Action = 0
 
-#
-#    EnhancedSupport.MailFilter.Keywords
-#        Description: Comma-separated list of keywords. Matching is case-insensitive
-#                     and matches anywhere in the subject or body (substring). Leave
-#                     empty to block nothing. Keywords cannot contain commas.
-#        Example:     gold,wowgold,.com,.net,discount,cheap
-#        Default:     (empty)
-#
-
-EnhancedSupport.MailFilter.Keywords = ""
+# Keywords are stored in the characters DB table `enhanced_support_mail_keywords`,
+# not in this file. Manage them in-game or from the console with:
+#   .support keyword add <keyword>
+#   .support keyword remove <keyword>
+#   .support list keywords
+# Matching is case-insensitive and matches anywhere in the mail subject or body.
 
 #
 #    EnhancedSupport.MailFilter.Message
