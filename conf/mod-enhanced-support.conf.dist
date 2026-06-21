@@ -47,3 +47,13 @@ EnhancedSupport.MailFilter.Keywords = ""
 #
 
 EnhancedSupport.MailFilter.Message = "Your mail was blocked because it contains a prohibited keyword."
+
+#
+#    EnhancedSupport.MailFilter.BanAuthor
+#        Description: Author name recorded on bans issued by Action 3/4. Also used as the
+#                     default search term for ".enhancedsupport bans" so a bare call lists
+#                     the bans this module issued. Avoid setting it to a real character name.
+#        Default:     "SupportModule"
+#
+
+EnhancedSupport.MailFilter.BanAuthor = "SupportModule"

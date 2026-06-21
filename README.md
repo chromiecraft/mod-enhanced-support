@@ -30,6 +30,16 @@ The `Action` option controls how matches are handled:
 | `3`    | Block mail + permanently ban the sender's account   |
 | `4`    | Block mail + permanently ban the account and its IP |
 
+## Commands
+
+| Command                                | Security      | Description                                                                                  |
+| -------------------------------------- | ------------- | -------------------------------------------------------------------------------------------- |
+| `.enhancedsupport reload`              | Administrator | Reloads this module's config from disk, independent of the global `.reload config`.          |
+| `.enhancedsupport bans [count] [author]` | Game Master | Lists the most recent account bans (newest first). `count` defaults to 10, max 50; `author` filters by the ban author substring and defaults to `EnhancedSupport.MailFilter.BanAuthor`, so a bare call shows the module's own bans. |
+
+Both commands work from the in-game chat and the server console. Examples:
+`.enhancedsupport bans` (module bans), `.enhancedsupport bans 20`, `.enhancedsupport bans 50 GM_Name`.
+
 ## Configuration
 
 | Option                               | Default   | Description                                                              |
@@ -38,6 +48,7 @@ The `Action` option controls how matches are handled:
 | `EnhancedSupport.MailFilter.Action`  | `0`       | Match handling (0-4, see table above); also gated by `EnhancedSupport.Enable` |
 | `EnhancedSupport.MailFilter.Keywords`| (empty)   | Comma-separated keywords matched in the subject/body; commas not allowed  |
 | `EnhancedSupport.MailFilter.Message` | (see conf)| System message shown to the sender when `Action = 1`; empty to send none  |
+| `EnhancedSupport.MailFilter.BanAuthor`| `SupportModule` | Author recorded on Action 3/4 bans; also the default `.enhancedsupport bans` search term |
 
 ## Layout
 

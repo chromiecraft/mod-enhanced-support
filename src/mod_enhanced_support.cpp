@@ -18,9 +18,12 @@
 #include "BanMgr.h"
 #include "Chat.h"
 #include "Config.h"
+#include "DatabaseEnv.h"
 #include "Log.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include "StringFormat.h"
+#include "Timer.h"
 #include "Tokenize.h"
 #include "WorldSession.h"
 
@@ -28,6 +31,8 @@
 #include <cctype>
 #include <string>
 #include <vector>
+
+using namespace Acore::ChatCommands;
 
 namespace
 {
@@ -42,12 +47,12 @@ namespace
         MAIL_FILTER_BAN_IP      = 4,
     };
 
-    constexpr char const* MAIL_FILTER_BAN_AUTHOR = "SupportModule";
     constexpr char const* MAIL_FILTER_BAN_REASON = "Mail filter: prohibited content (advertising/scam)";
 
     bool _enabled = true;
     uint8 _mailFilterAction = MAIL_FILTER_DISABLED;
     std::string _mailFilterMessage;
+    std::string _mailFilterBanAuthor;
     std::vector<std::string> _mailFilterKeywords;
 
     std::string ToLowerAscii(std::string_view input)
@@ -90,6 +95,16 @@ namespace
 
         return {};
     }
+
+    void LoadEnhancedSupportConfig()
+    {
+        _enabled = sConfigMgr->GetOption<bool>("EnhancedSupport.Enable", true);
+        _mailFilterAction = sConfigMgr->GetOption<uint8>("EnhancedSupport.MailFilter.Action", MAIL_FILTER_DISABLED);
+        _mailFilterMessage = sConfigMgr->GetOption<std::string>("EnhancedSupport.MailFilter.Message",
+            "Your mail was blocked because it contains a prohibited keyword.");
+        _mailFilterBanAuthor = sConfigMgr->GetOption<std::string>("EnhancedSupport.MailFilter.BanAuthor", "SupportModule");
+        LoadMailFilterKeywords();
+    }
 }
 
 // Reads config once on startup and on .reload config, so hot paths can read the
@@ -103,11 +118,7 @@ public:
 
     void OnAfterConfigLoad(bool /*reload*/) override
     {
-        _enabled = sConfigMgr->GetOption<bool>("EnhancedSupport.Enable", true);
-        _mailFilterAction = sConfigMgr->GetOption<uint8>("EnhancedSupport.MailFilter.Action", MAIL_FILTER_DISABLED);
-        _mailFilterMessage = sConfigMgr->GetOption<std::string>("EnhancedSupport.MailFilter.Message",
-            "Your mail was blocked because it contains a prohibited keyword.");
-        LoadMailFilterKeywords();
+        LoadEnhancedSupportConfig();
     }
 };
 
@@ -142,12 +153,12 @@ public:
                 player->GetSession()->KickPlayer("EnhancedSupport: prohibited mail content");
                 break;
             case MAIL_FILTER_BAN_ACCOUNT:
-                sBan->BanAccountByPlayerName(player->GetName(), "0", MAIL_FILTER_BAN_REASON, MAIL_FILTER_BAN_AUTHOR);
+                sBan->BanAccountByPlayerName(player->GetName(), "0", MAIL_FILTER_BAN_REASON, _mailFilterBanAuthor);
                 break;
             case MAIL_FILTER_BAN_IP:
                 // Ban the account first, then the IP (BanIP also disconnects all sessions on it).
-                sBan->BanAccountByPlayerName(player->GetName(), "0", MAIL_FILTER_BAN_REASON, MAIL_FILTER_BAN_AUTHOR);
-                sBan->BanIP(player->GetSession()->GetRemoteAddress(), "0", MAIL_FILTER_BAN_REASON, MAIL_FILTER_BAN_AUTHOR);
+                sBan->BanAccountByPlayerName(player->GetName(), "0", MAIL_FILTER_BAN_REASON, _mailFilterBanAuthor);
+                sBan->BanIP(player->GetSession()->GetRemoteAddress(), "0", MAIL_FILTER_BAN_REASON, _mailFilterBanAuthor);
                 break;
             default:
                 break;
@@ -157,8 +168,98 @@ public:
     }
 };
 
+class EnhancedSupportCommandScript : public CommandScript
+{
+public:
+    EnhancedSupportCommandScript() : CommandScript("EnhancedSupportCommandScript") { }
+
+    ChatCommandTable GetCommands() const override
+    {
+        static ChatCommandTable enhancedSupportTable =
+        {
+            { "reload", HandleReloadCommand, SEC_ADMINISTRATOR, Console::Yes },
+            { "bans",   HandleBansCommand,   SEC_GAMEMASTER,    Console::Yes },
+        };
+
+        static ChatCommandTable commandTable =
+        {
+            { "enhancedsupport", enhancedSupportTable },
+        };
+
+        return commandTable;
+    }
+
+    // Re-reads only this module's options from disk, independent of .reload config.
+    static bool HandleReloadCommand(ChatHandler* handler)
+    {
+        sConfigMgr->LoadModulesConfigs(true, false);
+        LoadEnhancedSupportConfig();
+        handler->PSendSysMessage("mod-enhanced-support: configuration reloaded.");
+        return true;
+    }
+
+    // Lists the most recent account bans, newest first. The author substring defaults
+    // to the module's configured ban author, so a bare call shows the module's own bans.
+    static bool HandleBansCommand(ChatHandler* handler, Optional<uint32> count, Tail author)
+    {
+        uint32 limit = count ? *count : 10;
+        limit = std::clamp<uint32>(limit, 1, 50);
+
+        std::string filter{ author };
+        if (filter.empty())
+            filter = _mailFilterBanAuthor;
+
+        std::string where;
+        if (!filter.empty())
+        {
+            std::string escaped = filter;
+            LoginDatabase.EscapeString(escaped);
+            where = Acore::StringFormat(" WHERE ab.bannedby LIKE '%{}%'", escaped);
+        }
+
+        QueryResult result = LoginDatabase.Query(
+            "SELECT a.username, ab.bandate, ab.unbandate, ab.bannedby, ab.banreason, ab.active "
+            "FROM account_banned ab JOIN account a ON a.id = ab.id{} "
+            "ORDER BY ab.bandate DESC LIMIT {}", where, limit);
+
+        if (!result)
+        {
+            handler->PSendSysMessage("No account bans found{}.",
+                filter.empty() ? "" : Acore::StringFormat(" by author matching \"{}\"", filter));
+            return true;
+        }
+
+        handler->PSendSysMessage("Last account ban(s){}:",
+            filter.empty() ? "" : Acore::StringFormat(" by author matching \"{}\"", filter));
+
+        uint32 shown = 0;
+        do
+        {
+            Field* fields = result->Fetch();
+            std::string username = fields[0].Get<std::string>();
+            uint32 bandate = fields[1].Get<uint32>();
+            uint32 unbandate = fields[2].Get<uint32>();
+            std::string bannedby = fields[3].Get<std::string>();
+            std::string banreason = fields[4].Get<std::string>();
+            bool active = fields[5].Get<bool>();
+
+            // unbandate == bandate is the convention for a permanent ban.
+            std::string expiry = (unbandate == bandate)
+                ? "permanent"
+                : Acore::StringFormat("until {}", Acore::Time::TimeToTimestampStr(Seconds(unbandate)));
+
+            handler->PSendSysMessage("{}. {} | {} | by {} | {} | {} | {}",
+                ++shown, username, Acore::Time::TimeToTimestampStr(Seconds(bandate)),
+                bannedby, active ? "active" : "expired", expiry, banreason);
+        } while (result->NextRow());
+
+        return true;
+    }
+};
+
 void AddEnhancedSupportScripts()
 {
     new EnhancedSupportWorldScript();
     new EnhancedSupportMailFilter();
+    new EnhancedSupportCommandScript();
 }
