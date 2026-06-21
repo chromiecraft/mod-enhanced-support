@@ -36,6 +36,16 @@ The `Action` option controls how matches are handled:
 | `3`    | Block mail + permanently ban the sender's account   |
 | `4`    | Block mail + permanently ban the account and its IP |
 
+### Startup Discord notice
+
+When enabled, posts a decorated Discord message once the world server has
+started, showing the git revision (hash, branch and build date) the server is
+running on. This uses `mod-chat-transmitter` as the transport, so that module
+must be installed and enabled; without it the notice
+is skipped and a warning is logged. The notice is scheduled (via
+`TaskScheduler`) a few seconds after startup so the relay's WebSocket has come
+up first; the delay is configurable.
+
 ## Commands
 
 All commands live under `.support` and work in-game and from the server console.
@@ -61,6 +71,9 @@ Examples: `.support keyword add wowgold`, `.support list keywords`,
 | `EnhancedSupport.MailFilter.Action`  | `0`       | Match handling (0-4, see table above); also gated by `EnhancedSupport.Enable` |
 | `EnhancedSupport.MailFilter.Message` | (see conf)| System message shown to the sender when `Action = 1`; empty to send none  |
 | `EnhancedSupport.MailFilter.BanAuthor`| `SupportModule` | Author recorded on Action 3/4 bans; also the default `.support list bans` search term |
+| `EnhancedSupport.StartupNotice.Enable` | `0`     | Post a Discord notice with the git revision on server start (needs mod-chat-transmitter) |
+| `EnhancedSupport.StartupNotice.Message`| `Server restarted!` | Headline for the startup notice; revision/branch/build date are appended |
+| `EnhancedSupport.StartupNotice.DelaySeconds`| `5`  | Seconds to wait after startup before sending, so the relay's WebSocket is up |
 
 ## Layout
 
