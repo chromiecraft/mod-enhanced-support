@@ -1,0 +1,49 @@
+[worldserver]
+
+########################################
+# mod-enhanced-support configuration
+########################################
+#
+#    EnhancedSupport.Enable
+#        Description: Master switch for the module.
+#        Default:     1 (enabled)
+#
+
+EnhancedSupport.Enable = 1
+
+#
+#    EnhancedSupport.MailFilter.Action
+#        Description: What to do when player-to-player mail's subject or body contains
+#                     a configured keyword. Intended to stop gold-seller and scam
+#                     advertising. Also gated by EnhancedSupport.Enable. The mail is
+#                     always blocked for any value above 0; the action escalates from
+#                     there.
+#        Default:     0 - Disabled (filter off)
+#                     1 - Block mail + notify the sender
+#                     2 - Block mail + kick the sender
+#                     3 - Block mail + permanently ban the sender's account
+#                     4 - Block mail + permanently ban the account and its IP
+#
+
+EnhancedSupport.MailFilter.Action = 0
+
+#
+#    EnhancedSupport.MailFilter.Keywords
+#        Description: Comma-separated list of keywords. Matching is case-insensitive
+#                     and matches anywhere in the subject or body (substring). Leave
+#                     empty to block nothing. Keywords cannot contain commas.
+#        Example:     gold,wowgold,.com,.net,discount,cheap
+#        Default:     (empty)
+#
+
+EnhancedSupport.MailFilter.Keywords = ""
+
+#
+#    EnhancedSupport.MailFilter.Message
+#        Description: System chat message shown to the sender when Action = 1 (notify).
+#                     Leave empty to send no message (the client still shows a generic
+#                     send error). Higher actions kick/ban instead of messaging.
+#        Default:     "Your mail was blocked because it contains a prohibited keyword."
+#
+
+EnhancedSupport.MailFilter.Message = "Your mail was blocked because it contains a prohibited keyword."
