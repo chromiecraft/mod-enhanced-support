@@ -42,7 +42,7 @@ namespace
         MAIL_FILTER_BAN_IP      = 4,
     };
 
-    constexpr char const* MAIL_FILTER_BAN_AUTHOR = "Module";
+    constexpr char const* MAIL_FILTER_BAN_AUTHOR = "SupportModule";
     constexpr char const* MAIL_FILTER_BAN_REASON = "Mail filter: prohibited content (advertising/scam)";
 
     bool _enabled = true;
