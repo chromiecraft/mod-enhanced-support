@@ -45,6 +45,12 @@ namespace EnhancedSupport
     std::string_view GetMailFilterActionName();
     std::string const& GetMailFilterMessage();
     std::string const& GetBanAuthor();
+
+    // Highest valid mail filter action value.
+    uint8 GetMaxMailFilterAction();
+
+    // Runtime-only override of the mail filter action; reverts to config on reload.
+    void SetMailFilterAction(uint8 action);
 }
 
 #endif // MOD_ENHANCED_SUPPORT_H

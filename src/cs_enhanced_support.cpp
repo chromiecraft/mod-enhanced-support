@@ -49,6 +49,7 @@ public:
         static ChatCommandTable supportTable =
         {
             { "info",    HandleInfoCommand,   SEC_GAMEMASTER,    Console::Yes },
+            { "action",  HandleActionCommand, SEC_ADMINISTRATOR, Console::Yes },
             { "reload",  HandleReloadCommand, SEC_ADMINISTRATOR, Console::Yes },
             { "list",    listTable },
             { "keyword", keywordTable },
@@ -73,6 +74,23 @@ public:
 
         std::string const& message = EnhancedSupport::GetMailFilterMessage();
         handler->PSendSysMessage("  Notify message: {}", message.empty() ? "(none)" : message);
+        return true;
+    }
+
+    // Runtime-only override of the mail filter action; not saved, reverts on reload.
+    static bool HandleActionCommand(ChatHandler* handler, uint8 action)
+    {
+        if (action > EnhancedSupport::GetMaxMailFilterAction())
+        {
+            handler->PSendSysMessage("Usage: .support action <0-{}> (0=off, 1=notify, 2=kick, 3=ban account, 4=ban account+IP)",
+                EnhancedSupport::GetMaxMailFilterAction());
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        EnhancedSupport::SetMailFilterAction(action);
+        handler->PSendSysMessage("Mail filter action set to {} ({}) - runtime only, reverts on reload.",
+            static_cast<uint32>(action), EnhancedSupport::GetMailFilterActionName());
         return true;
     }
 

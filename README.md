@@ -43,6 +43,7 @@ All commands live under `.support` and work in-game and from the server console.
 | Command                                  | Security      | Description                                                                                  |
 | ---------------------------------------- | ------------- | -------------------------------------------------------------------------------------------- |
 | `.support info`                          | Game Master   | Shows active settings: enabled state, mail filter action, keyword count, ban author, message. |
+| `.support action <0-4>`                  | Administrator | Overrides the mail filter action at runtime (not saved; reverts on `.support reload` or restart). |
 | `.support reload`                        | Administrator | Reloads this module's config and keywords, independent of the global `.reload config`.       |
 | `.support keyword add <keyword>`         | Administrator | Adds a blocked keyword (stored lowercased).                                                   |
 | `.support keyword remove <keyword>`      | Administrator | Removes a blocked keyword.                                                                    |

@@ -144,6 +144,16 @@ namespace EnhancedSupport
         return _mailFilterAction;
     }
 
+    uint8 GetMaxMailFilterAction()
+    {
+        return MAIL_FILTER_BAN_IP;
+    }
+
+    void SetMailFilterAction(uint8 action)
+    {
+        _mailFilterAction = action;
+    }
+
     std::string_view GetMailFilterActionName()
     {
         switch (_mailFilterAction)
