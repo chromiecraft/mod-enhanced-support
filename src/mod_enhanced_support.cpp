@@ -237,9 +237,10 @@ public:
 #ifdef HAS_CHAT_TRANSMITTER
         {
             std::string note = Acore::StringFormat(
-                "**{}** ({}) blocked - keyword `{}`, action `{}`\nSubject: {}",
-                player->GetName(), player->GetSession()->GetRemoteAddress(), matched,
-                EnhancedSupport::GetMailFilterActionName(), subject);
+                "**{}** ({}) | Account {} | IP {}\nBlocked - keyword `{}`, action `{}`\nSubject: {}\nBody: {}",
+                player->GetName(), player->GetGUID().ToString(),
+                player->GetSession()->GetAccountId(), player->GetSession()->GetRemoteAddress(),
+                matched, EnhancedSupport::GetMailFilterActionName(), subject, body);
             sChatTransmitter->QueueNotification("MailFilter", note);
         }
 #endif
