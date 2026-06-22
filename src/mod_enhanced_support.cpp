@@ -24,8 +24,10 @@
 #include "Log.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include "StringConvert.h"
 #include "StringFormat.h"
 #include "TaskScheduler.h"
+#include "Util.h"
 #include "WorldSession.h"
 
 #include <algorithm>
@@ -58,6 +60,10 @@ namespace
     std::string _mailFilterMessage;
     std::string _mailFilterBanAuthor;
     std::vector<std::string> _mailFilterKeywords;
+
+    // Mail carrying at least this much money (in copper) is logged (and relayed
+    // to Discord). 0 disables the check. Parsed from a g/s/c money string.
+    uint32 _goldFilterThresholdCopper = 0;
 
     bool _startupNoticeEnabled = false;
     std::string _startupNoticeMessage;
@@ -186,6 +192,16 @@ namespace EnhancedSupport
         return _mailFilterMessage;
     }
 
+    uint32 GetGoldFilterThreshold()
+    {
+        return _goldFilterThresholdCopper;
+    }
+
+    std::string FormatMoney(uint32 copper)
+    {
+        return Acore::StringFormat("{}g {}s {}c", copper / GOLD, (copper % GOLD) / SILVER, copper % SILVER);
+    }
+
     void LoadConfig()
     {
         _enabled = sConfigMgr->GetOption<bool>("EnhancedSupport.Enable", true);
@@ -193,6 +209,22 @@ namespace EnhancedSupport
         _mailFilterMessage = sConfigMgr->GetOption<std::string>("EnhancedSupport.MailFilter.Message",
             "Your mail was blocked because it contains a prohibited keyword.");
         _mailFilterBanAuthor = sConfigMgr->GetOption<std::string>("EnhancedSupport.MailFilter.BanAuthor", "SupportModule");
+
+        // Accepts a g/s/c money string ("100g", "50g 30s") like the .send money
+        // command; a bare number is copper. 0 (or unparseable) disables the check.
+        std::string const goldThreshold = ToLowerAscii(sConfigMgr->GetOption<std::string>("EnhancedSupport.GoldFilter.Threshold", "0"));
+        Optional<int32> const parsed = goldThreshold.find_first_of("gsc") != std::string::npos
+            ? MoneyStringToMoney(goldThreshold)
+            : Acore::StringTo<int32>(goldThreshold);
+        if (!parsed)
+        {
+            LOG_WARN("module.enhancedsupport",
+                "GoldFilter: could not parse EnhancedSupport.GoldFilter.Threshold = \"{}\"; gold check disabled.", goldThreshold);
+            _goldFilterThresholdCopper = 0;
+        }
+        else
+            _goldFilterThresholdCopper = *parsed > 0 ? static_cast<uint32>(*parsed) : 0;
+
         _startupNoticeEnabled = sConfigMgr->GetOption<bool>("EnhancedSupport.StartupNotice.Enable", false);
         _startupNoticeMessage = sConfigMgr->GetOption<std::string>("EnhancedSupport.StartupNotice.Message", "Server restarted!");
         _startupNoticeDelaySeconds = sConfigMgr->GetOption<uint32>("EnhancedSupport.StartupNotice.DelaySeconds", 5);
@@ -259,7 +291,8 @@ private:
     TaskScheduler _scheduler;
 };
 
-// Blocks player-sent mail whose subject/body match a configured keyword.
+// Blocks player-sent mail whose subject/body match a configured keyword, and
+// logs (without blocking) mail carrying gold above the configured threshold.
 class EnhancedSupportMailFilter : public PlayerScript
 {
 public:
@@ -268,9 +301,15 @@ public:
     }) { }
 
     bool OnPlayerCanSendMail(Player* player, ObjectGuid receiverGuid, ObjectGuid /*mailbox*/,
-        std::string& subject, std::string& body, uint32 /*money*/, uint32 /*COD*/, Item* /*item*/) override
+        std::string& subject, std::string& body, uint32 money, uint32 /*COD*/, Item* /*item*/) override
     {
-        if (!_enabled || _mailFilterAction == MAIL_FILTER_DISABLED || _mailFilterKeywords.empty())
+        if (!_enabled)
+            return true;
+
+        // Log-only: flag unusually large gold transfers without blocking them.
+        LogHighValueMail(player, receiverGuid, money);
+
+        if (_mailFilterAction == MAIL_FILTER_DISABLED || _mailFilterKeywords.empty())
             return true;
 
         std::string const matched = FindMatchingKeyword(subject, body);
@@ -315,6 +354,31 @@ public:
         }
 
         return false;
+    }
+
+private:
+    static void LogHighValueMail(Player* player, ObjectGuid receiverGuid, uint32 money)
+    {
+        if (_goldFilterThresholdCopper == 0 || money < _goldFilterThresholdCopper)
+            return;
+
+        std::string const amount = EnhancedSupport::FormatMoney(money);
+        std::string const threshold = EnhancedSupport::FormatMoney(_goldFilterThresholdCopper);
+
+        LOG_INFO("module.enhancedsupport",
+            "GoldFilter: high-value mail from {} ({}) to {} - {} (threshold {}) | Account {} | IP {}",
+            player->GetName(), player->GetGUID().ToString(), receiverGuid.ToString(),
+            amount, threshold,
+            player->GetSession()->GetAccountId(), player->GetSession()->GetRemoteAddress());
+
+#ifdef HAS_CHAT_TRANSMITTER
+        std::string note = Acore::StringFormat(
+            "**{}** ({}) | Account {} | IP {}\nHigh-value mail - {} (threshold {})\nTo: {}",
+            player->GetName(), player->GetGUID().ToString(),
+            player->GetSession()->GetAccountId(), player->GetSession()->GetRemoteAddress(),
+            amount, threshold, receiverGuid.ToString());
+        sChatTransmitter->QueueNotification("GoldFilter", note);
+#endif
     }
 };
 
