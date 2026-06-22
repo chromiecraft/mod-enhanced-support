@@ -43,8 +43,8 @@
 
 namespace
 {
-    // What to do when mail matches a filtered keyword. Higher values block the
-    // mail and escalate the punishment.
+    // What to do when content matches a filtered keyword. Higher values block
+    // the content and escalate the punishment. Shared by the mail and chat filters.
     enum MailFilterAction : uint8
     {
         MAIL_FILTER_DISABLED    = 0,
@@ -55,12 +55,17 @@ namespace
     };
 
     constexpr char const* MAIL_FILTER_BAN_REASON = "Mail filter: prohibited content (advertising/scam)";
+    constexpr char const* CHAT_FILTER_BAN_REASON = "Chat filter: prohibited content (advertising/scam)";
 
     bool _enabled = true;
     uint8 _mailFilterAction = MAIL_FILTER_DISABLED;
     std::string _mailFilterMessage;
     std::string _mailFilterBanAuthor;
     std::vector<std::string> _mailFilterKeywords;
+
+    // Same keyword list and action scale as the mail filter, applied to SAY/YELL/EMOTE.
+    uint8 _chatFilterAction = MAIL_FILTER_DISABLED;
+    std::string _chatFilterMessage;
 
     // Mail carrying at least this much money (in copper) is logged (and relayed
     // to Discord). 0 disables the check. Parsed from a g/s/c money string.
@@ -80,10 +85,11 @@ namespace
         return out;
     }
 
-    // Returns the first matching keyword, or empty if the text is clean.
-    std::string FindMatchingKeyword(std::string const& subject, std::string const& body)
+    // Returns the first keyword contained in the text (case-insensitive), or
+    // empty if the text is clean.
+    std::string FindMatchingKeyword(std::string const& text)
     {
-        std::string const haystack = ToLowerAscii(subject) + '\n' + ToLowerAscii(body);
+        std::string const haystack = ToLowerAscii(text);
         for (std::string const& keyword : _mailFilterKeywords)
         {
             if (haystack.find(keyword) != std::string::npos)
@@ -91,6 +97,33 @@ namespace
         }
 
         return {};
+    }
+
+    // Carries out the escalating punishment for a keyword match. The caller is
+    // responsible for suppressing the offending content itself.
+    void ApplyFilterAction(Player* player, uint8 action, std::string const& notifyMessage,
+        char const* kickReason, char const* banReason)
+    {
+        switch (action)
+        {
+            case MAIL_FILTER_NOTIFY:
+                if (!notifyMessage.empty())
+                    ChatHandler(player->GetSession()).SendSysMessage(notifyMessage);
+                break;
+            case MAIL_FILTER_KICK:
+                player->GetSession()->KickPlayer(kickReason);
+                break;
+            case MAIL_FILTER_BAN_ACCOUNT:
+                sBan->BanAccountByPlayerName(player->GetName(), "0", banReason, _mailFilterBanAuthor);
+                break;
+            case MAIL_FILTER_BAN_IP:
+                // Ban the account first, then the IP (BanIP also disconnects all sessions on it).
+                sBan->BanAccountByPlayerName(player->GetName(), "0", banReason, _mailFilterBanAuthor);
+                sBan->BanIP(player->GetSession()->GetRemoteAddress(), "0", banReason, _mailFilterBanAuthor);
+                break;
+            default:
+                break;
+        }
     }
 }
 
@@ -175,9 +208,9 @@ namespace EnhancedSupport
         _mailFilterAction = action;
     }
 
-    std::string_view GetMailFilterActionName()
+    std::string_view GetFilterActionName(uint8 action)
     {
-        switch (_mailFilterAction)
+        switch (action)
         {
             case MAIL_FILTER_DISABLED:    return "disabled";
             case MAIL_FILTER_NOTIFY:      return "notify";
@@ -188,9 +221,24 @@ namespace EnhancedSupport
         }
     }
 
+    std::string_view GetMailFilterActionName()
+    {
+        return GetFilterActionName(_mailFilterAction);
+    }
+
     std::string const& GetMailFilterMessage()
     {
         return _mailFilterMessage;
+    }
+
+    uint8 GetChatFilterAction()
+    {
+        return _chatFilterAction;
+    }
+
+    std::string_view GetChatFilterActionName()
+    {
+        return GetFilterActionName(_chatFilterAction);
     }
 
     uint32 GetGoldFilterThreshold()
@@ -210,6 +258,10 @@ namespace EnhancedSupport
         _mailFilterMessage = sConfigMgr->GetOption<std::string>("EnhancedSupport.MailFilter.Message",
             "Your mail was blocked because it contains a prohibited keyword.");
         _mailFilterBanAuthor = sConfigMgr->GetOption<std::string>("EnhancedSupport.MailFilter.BanAuthor", "SupportModule");
+
+        _chatFilterAction = sConfigMgr->GetOption<uint8>("EnhancedSupport.ChatFilter.Action", MAIL_FILTER_DISABLED);
+        _chatFilterMessage = sConfigMgr->GetOption<std::string>("EnhancedSupport.ChatFilter.Message",
+            "Your message was blocked because it contains a prohibited keyword.");
 
         // Accepts a g/s/c money string ("100g", "50g 30s") like the .send money
         // command; a bare number is copper. 0 (or unparseable) disables the check.
@@ -313,7 +365,7 @@ public:
         if (_mailFilterAction == MAIL_FILTER_DISABLED || _mailFilterKeywords.empty())
             return true;
 
-        std::string const matched = FindMatchingKeyword(subject, body);
+        std::string const matched = FindMatchingKeyword(subject + '\n' + body);
         if (matched.empty())
             return true;
 
@@ -342,26 +394,8 @@ public:
         }
 #endif
 
-        switch (_mailFilterAction)
-        {
-            case MAIL_FILTER_NOTIFY:
-                if (!_mailFilterMessage.empty())
-                    ChatHandler(player->GetSession()).SendSysMessage(_mailFilterMessage);
-                break;
-            case MAIL_FILTER_KICK:
-                player->GetSession()->KickPlayer("EnhancedSupport: prohibited mail content");
-                break;
-            case MAIL_FILTER_BAN_ACCOUNT:
-                sBan->BanAccountByPlayerName(player->GetName(), "0", MAIL_FILTER_BAN_REASON, _mailFilterBanAuthor);
-                break;
-            case MAIL_FILTER_BAN_IP:
-                // Ban the account first, then the IP (BanIP also disconnects all sessions on it).
-                sBan->BanAccountByPlayerName(player->GetName(), "0", MAIL_FILTER_BAN_REASON, _mailFilterBanAuthor);
-                sBan->BanIP(player->GetSession()->GetRemoteAddress(), "0", MAIL_FILTER_BAN_REASON, _mailFilterBanAuthor);
-                break;
-            default:
-                break;
-        }
+        ApplyFilterAction(player, _mailFilterAction, _mailFilterMessage,
+            "EnhancedSupport: prohibited mail content", MAIL_FILTER_BAN_REASON);
 
         return false;
     }
@@ -405,8 +439,72 @@ private:
     }
 };
 
+// Filters player SAY/YELL/EMOTE against the same keyword list as the mail filter.
+// OnPlayerBeforeSendChatMessage is the only chat hook the core fires for these
+// types, and it can't abort the broadcast, so a matched message is blanked.
+class EnhancedSupportChatFilter : public PlayerScript
+{
+public:
+    EnhancedSupportChatFilter() : PlayerScript("EnhancedSupportChatFilter", {
+        PLAYERHOOK_ON_BEFORE_SEND_CHAT_MESSAGE
+    }) { }
+
+    void OnPlayerBeforeSendChatMessage(Player* player, uint32& type, uint32& /*lang*/, std::string& msg) override
+    {
+        if (!_enabled || _chatFilterAction == MAIL_FILTER_DISABLED || _mailFilterKeywords.empty())
+            return;
+
+        if (type != CHAT_MSG_SAY && type != CHAT_MSG_YELL && type != CHAT_MSG_EMOTE)
+            return;
+
+        std::string const matched = FindMatchingKeyword(msg);
+        if (matched.empty())
+            return;
+
+        LOG_INFO("module.enhancedsupport",
+            "ChatFilter: blocked {} from {} ({}) - matched keyword '{}', action {} | message: \"{}\"",
+            ChatTypeName(type), player->GetName(), player->GetGUID().GetCounter(), matched,
+            static_cast<uint32>(_chatFilterAction), msg);
+
+#ifdef HAS_CHAT_TRANSMITTER
+        {
+            std::string note = Acore::StringFormat(
+                "🚫 **Chat blocked** — keyword `{}`, action `{}`\n"
+                "👤 From: **{}** (GUID {}) | Account {} | IP {}\n"
+                "💬 Channel: {}\n"
+                "📝 Message: {}",
+                matched, EnhancedSupport::GetChatFilterActionName(),
+                player->GetName(), player->GetGUID().GetCounter(),
+                player->GetSession()->GetAccountId(), player->GetSession()->GetRemoteAddress(),
+                ChatTypeName(type), msg);
+            sChatTransmitter->QueueNotification("ChatFilter", note);
+        }
+#endif
+
+        // This hook runs before the message is broadcast but can't stop it, so
+        // clear the text to keep the prohibited content from reaching others.
+        msg.clear();
+
+        ApplyFilterAction(player, _chatFilterAction, _chatFilterMessage,
+            "EnhancedSupport: prohibited chat content", CHAT_FILTER_BAN_REASON);
+    }
+
+private:
+    static char const* ChatTypeName(uint32 type)
+    {
+        switch (type)
+        {
+            case CHAT_MSG_SAY:  return "say";
+            case CHAT_MSG_YELL: return "yell";
+            case CHAT_MSG_EMOTE: return "emote";
+            default:            return "chat";
+        }
+    }
+};
+
 void AddEnhancedSupportScripts()
 {
     new EnhancedSupportWorldScript();
     new EnhancedSupportMailFilter();
+    new EnhancedSupportChatFilter();
 }
