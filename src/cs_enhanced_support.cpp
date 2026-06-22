@@ -70,6 +70,11 @@ public:
         handler->PSendSysMessage("  Mail filter action: {} ({})",
             static_cast<uint32>(EnhancedSupport::GetMailFilterAction()), EnhancedSupport::GetMailFilterActionName());
         handler->PSendSysMessage("  Keywords loaded: {}", EnhancedSupport::GetKeywords().size());
+
+        uint32 const goldThreshold = EnhancedSupport::GetGoldFilterThreshold();
+        handler->PSendSysMessage("  Gold filter threshold: {}",
+            goldThreshold == 0 ? "disabled" : EnhancedSupport::FormatMoney(goldThreshold));
+
         handler->PSendSysMessage("  Ban author: {}", EnhancedSupport::GetBanAuthor());
 
         std::string const& message = EnhancedSupport::GetMailFilterMessage();

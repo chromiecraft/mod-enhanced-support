@@ -46,6 +46,12 @@ namespace EnhancedSupport
     std::string const& GetMailFilterMessage();
     std::string const& GetBanAuthor();
 
+    // Money threshold (in copper) at/above which mail is logged; 0 disables the check.
+    uint32 GetGoldFilterThreshold();
+
+    // Formats a copper amount as a "Xg Ys Zc" string.
+    std::string FormatMoney(uint32 copper);
+
     // Highest valid mail filter action value.
     uint8 GetMaxMailFilterAction();
 
