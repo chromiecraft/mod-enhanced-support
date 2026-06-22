@@ -279,9 +279,8 @@ private:
 
 #ifdef HAS_CHAT_TRANSMITTER
         std::string note = Acore::StringFormat(
-            "🔄 **{}**\n```\n{} rev. {} {} ({} branch)\n```",
-            _startupNoticeMessage, GitRevision::GetCompanyNameStr(),
-            GitRevision::GetHash(), GitRevision::GetDate(), GitRevision::GetBranch());
+            "🔄 **{}**\n```\n{}\n```",
+            _startupNoticeMessage, GitRevision::GetFullVersion());
         sChatTransmitter->QueueNotification("ServerStatus", note);
         LOG_INFO("module.enhancedsupport", "StartupNotice: queued Discord server-start notice (revision {})", GitRevision::GetHash());
 #else
