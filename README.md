@@ -72,7 +72,7 @@ Examples: `.support keyword add wowgold`, `.support list keywords`,
 | `EnhancedSupport.MailFilter.Message` | (see conf)| System message shown to the sender when `Action = 1`; empty to send none  |
 | `EnhancedSupport.MailFilter.BanAuthor`| `SupportModule` | Author recorded on Action 3/4 bans; also the default `.support list bans` search term |
 | `EnhancedSupport.StartupNotice.Enable` | `0`     | Post a Discord notice with the git revision on server start (needs mod-chat-transmitter) |
-| `EnhancedSupport.StartupNotice.Message`| `Server restarted!` | Headline for the startup notice; revision/branch/build date are appended |
+| `EnhancedSupport.StartupNotice.Message`| `Server restarted!` | Headline for the startup notice; the full version line is shown below it in a code block |
 | `EnhancedSupport.StartupNotice.DelaySeconds`| `5`  | Seconds to wait after startup before sending, so the relay's WebSocket is up |
 
 ## Layout
