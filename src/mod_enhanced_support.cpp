@@ -17,6 +17,7 @@
 
 #include "EnhancedSupport.h"
 #include "BanMgr.h"
+#include "CharacterCache.h"
 #include "Chat.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
@@ -316,18 +317,27 @@ public:
         if (matched.empty())
             return true;
 
+        std::string const receiverName = ResolveCharacterName(receiverGuid);
+
         LOG_INFO("module.enhancedsupport",
-            "MailFilter: blocked mail from {} ({}) to {} - matched keyword '{}', action {} | subject: \"{}\" | body: \"{}\"",
-            player->GetName(), player->GetGUID().ToString(), receiverGuid.ToString(), matched,
+            "MailFilter: blocked mail from {} ({}) to {} ({}) - matched keyword '{}', action {} | subject: \"{}\" | body: \"{}\"",
+            player->GetName(), player->GetGUID().GetCounter(),
+            receiverName, receiverGuid.GetCounter(), matched,
             static_cast<uint32>(_mailFilterAction), subject, body);
 
 #ifdef HAS_CHAT_TRANSMITTER
         {
             std::string note = Acore::StringFormat(
-                "**{}** ({}) | Account {} | IP {}\nBlocked - keyword `{}`, action `{}`\nSubject: {}\nBody: {}",
-                player->GetName(), player->GetGUID().ToString(),
+                "🚫 **Mail blocked** — keyword `{}`, action `{}`\n"
+                "👤 From: **{}** (GUID {}) | Account {} | IP {}\n"
+                "📬 To: **{}** (GUID {})\n"
+                "✉️ Subject: {}\n"
+                "📝 Body: {}",
+                matched, EnhancedSupport::GetMailFilterActionName(),
+                player->GetName(), player->GetGUID().GetCounter(),
                 player->GetSession()->GetAccountId(), player->GetSession()->GetRemoteAddress(),
-                matched, EnhancedSupport::GetMailFilterActionName(), subject, body);
+                receiverName, receiverGuid.GetCounter(),
+                subject, body);
             sChatTransmitter->QueueNotification("MailFilter", note);
         }
 #endif
@@ -357,6 +367,14 @@ public:
     }
 
 private:
+    static std::string ResolveCharacterName(ObjectGuid guid)
+    {
+        std::string name;
+        if (!sCharacterCache->GetCharacterNameByGuid(guid, name) || name.empty())
+            name = "Unknown";
+        return name;
+    }
+
     static void LogHighValueMail(Player* player, ObjectGuid receiverGuid, uint32 money)
     {
         if (_goldFilterThresholdCopper == 0 || money < _goldFilterThresholdCopper)
@@ -364,20 +382,25 @@ private:
 
         std::string const amount = EnhancedSupport::FormatMoney(money);
         std::string const threshold = EnhancedSupport::FormatMoney(_goldFilterThresholdCopper);
+        std::string const receiverName = ResolveCharacterName(receiverGuid);
 
         LOG_INFO("module.enhancedsupport",
-            "GoldFilter: high-value mail from {} ({}) to {} - {} (threshold {}) | Account {} | IP {}",
-            player->GetName(), player->GetGUID().ToString(), receiverGuid.ToString(),
+            "MailFilter: high-value mail from {} ({}) to {} ({}) - {} (threshold {}) | Account {} | IP {}",
+            player->GetName(), player->GetGUID().GetCounter(),
+            receiverName, receiverGuid.GetCounter(),
             amount, threshold,
             player->GetSession()->GetAccountId(), player->GetSession()->GetRemoteAddress());
 
 #ifdef HAS_CHAT_TRANSMITTER
         std::string note = Acore::StringFormat(
-            "**{}** ({}) | Account {} | IP {}\nHigh-value mail - {} (threshold {})\nTo: {}",
-            player->GetName(), player->GetGUID().ToString(),
+            "💰 **High-value mail** — {} (threshold {})\n"
+            "👤 From: **{}** (GUID {}) | Account {} | IP {}\n"
+            "📬 To: **{}** (GUID {})",
+            amount, threshold,
+            player->GetName(), player->GetGUID().GetCounter(),
             player->GetSession()->GetAccountId(), player->GetSession()->GetRemoteAddress(),
-            amount, threshold, receiverGuid.ToString());
-        sChatTransmitter->QueueNotification("GoldFilter", note);
+            receiverName, receiverGuid.GetCounter());
+        sChatTransmitter->QueueNotification("MailFilter", note);
 #endif
     }
 };
