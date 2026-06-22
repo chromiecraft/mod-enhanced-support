@@ -55,6 +55,31 @@ EnhancedSupport.MailFilter.Message = "Your mail was blocked because it contains 
 EnhancedSupport.MailFilter.BanAuthor = "SupportModule"
 
 #
+#    EnhancedSupport.ChatFilter.Action
+#        Description: What to do when a player's SAY, YELL or EMOTE message contains a
+#                     configured keyword. Uses the same keyword list as the mail filter
+#                     and the same ban author. Also gated by EnhancedSupport.Enable. The
+#                     matched message is always suppressed for any value above 0; the
+#                     action escalates from there.
+#        Default:     0 - Disabled (filter off)
+#                     1 - Block message + notify the sender
+#                     2 - Block message + kick the sender
+#                     3 - Block message + permanently ban the sender's account
+#                     4 - Block message + permanently ban the account and its IP
+#
+
+EnhancedSupport.ChatFilter.Action = 0
+
+#
+#    EnhancedSupport.ChatFilter.Message
+#        Description: System chat message shown to the sender when Action = 1 (notify).
+#                     Leave empty to send no message. Higher actions kick/ban instead.
+#        Default:     "Your message was blocked because it contains a prohibited keyword."
+#
+
+EnhancedSupport.ChatFilter.Message = "Your message was blocked because it contains a prohibited keyword."
+
+#
 #    EnhancedSupport.GoldFilter.Threshold
 #        Description: Log (and relay to Discord, if mod-chat-transmitter is available) any
 #                     player-to-player mail carrying at least this much money. Intended to

@@ -44,6 +44,8 @@ namespace EnhancedSupport
     uint8 GetMailFilterAction();
     std::string_view GetMailFilterActionName();
     std::string const& GetMailFilterMessage();
+    uint8 GetChatFilterAction();
+    std::string_view GetChatFilterActionName();
     std::string const& GetBanAuthor();
 
     // Money threshold (in copper) at/above which mail is logged; 0 disables the check.

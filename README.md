@@ -36,6 +36,26 @@ The `Action` option controls how matches are handled:
 | `3`    | Block mail + permanently ban the sender's account   |
 | `4`    | Block mail + permanently ban the account and its IP |
 
+### Chat keyword filter
+
+Scans player `SAY`, `YELL` and `EMOTE` messages against the same keyword list as
+the mail filter (case-insensitive substring match) and applies the same
+escalating actions, configured separately via `EnhancedSupport.ChatFilter.Action`.
+Blocked messages are logged under `module.enhancedsupport`.
+
+The chat hook the core exposes for these message types runs before the message
+is broadcast but cannot abort it, so a matched message has its text cleared
+rather than being dropped outright; with the kick/ban actions the sender is
+removed regardless.
+
+| Action | Behaviour                                               |
+| ------ | ------------------------------------------------------- |
+| `0`    | Disabled (filter off)                                   |
+| `1`    | Block message + notify the sender                       |
+| `2`    | Block message + kick the sender                         |
+| `3`    | Block message + permanently ban the sender's account    |
+| `4`    | Block message + permanently ban the account and its IP  |
+
 ### Startup Discord notice
 
 When enabled, posts a decorated Discord message once the world server has
@@ -52,7 +72,7 @@ All commands live under `.support` and work in-game and from the server console.
 
 | Command                                  | Security      | Description                                                                                  |
 | ---------------------------------------- | ------------- | -------------------------------------------------------------------------------------------- |
-| `.support info`                          | Game Master   | Shows active settings: enabled state, mail filter action, keyword count, ban author, message. |
+| `.support info`                          | Game Master   | Shows active settings: enabled state, mail and chat filter actions, keyword count, ban author, message. |
 | `.support action <0-4>`                  | Administrator | Overrides the mail filter action at runtime (not saved; reverts on `.support reload` or restart). |
 | `.support reload`                        | Administrator | Reloads this module's config and keywords, independent of the global `.reload config`.       |
 | `.support keyword add <keyword>`         | Administrator | Adds a blocked keyword (stored lowercased).                                                   |
