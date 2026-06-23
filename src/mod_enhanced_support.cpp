@@ -20,11 +20,14 @@
 #include "CharacterCache.h"
 #include "Chat.h"
 #include "Config.h"
+#include "Creature.h"
 #include "DatabaseEnv.h"
+#include "GameObject.h"
 #include "GitRevision.h"
 #include "Item.h"
 #include "ItemTemplate.h"
 #include "Log.h"
+#include "Map.h"
 #include "ObjectGuid.h"
 #include "Player.h"
 #include "ScriptMgr.h"
@@ -84,6 +87,10 @@ namespace
     // this many levels is logged (and relayed to Discord). 0 disables the check.
     // Surfaces low-level characters pulling high-level gear from world chests etc.
     uint32 _lootFilterLevelGap = 0;
+
+    // Restricts the loot check to looters at or below this level. 0 means no cap
+    // (applies to every level). Lets the check target only low-level characters.
+    uint8 _lootFilterMaxLevel = 0;
 
     bool _startupNoticeEnabled = false;
     std::string _startupNoticeMessage;
@@ -319,6 +326,11 @@ namespace EnhancedSupport
         return _lootFilterLevelGap;
     }
 
+    uint8 GetLootFilterMaxLevel()
+    {
+        return _lootFilterMaxLevel;
+    }
+
     std::string FormatMoney(uint32 copper)
     {
         return Acore::StringFormat("{}g {}s {}c", copper / GOLD, (copper % GOLD) / SILVER, copper % SILVER);
@@ -353,6 +365,7 @@ namespace EnhancedSupport
             _goldFilterThresholdCopper = *parsed > 0 ? static_cast<uint32>(*parsed) : 0;
 
         _lootFilterLevelGap = sConfigMgr->GetOption<uint32>("EnhancedSupport.LootFilter.LevelGap", 0);
+        _lootFilterMaxLevel = sConfigMgr->GetOption<uint8>("EnhancedSupport.LootFilter.MaxLevel", 0);
 
         _startupNoticeEnabled = sConfigMgr->GetOption<bool>("EnhancedSupport.StartupNotice.Enable", false);
         _startupNoticeMessage = sConfigMgr->GetOption<std::string>("EnhancedSupport.StartupNotice.Message", "Server restarted!");
@@ -621,6 +634,9 @@ public:
             return;
 
         uint32 const playerLevel = player->GetLevel();
+        if (_lootFilterMaxLevel != 0 && playerLevel > _lootFilterMaxLevel)
+            return;
+
         if (proto->RequiredLevel <= playerLevel)
             return;
 
@@ -628,13 +644,18 @@ public:
         if (gap < _lootFilterLevelGap)
             return;
 
-        char const* source = LootSourceName(lootguid);
+        LootSource const src = ResolveLootSource(player, lootguid);
+
+        // Fish are caught well above the looter's level by design, so skip loot
+        // pulled from a fishing bobber or fishing hole.
+        if (src.isFishing)
+            return;
 
         LOG_INFO("module.enhancedsupport",
-            "LootFilter: {} ({}, level {}) looted {}x [{}] ({}, requires level {}, gap {}) from {} {} | Account {} | IP {}",
+            "LootFilter: {} ({}, level {}) looted {}x [{}] ({}, requires level {}, gap {}) from {} (entry {}, spawn {}) | Account {} | IP {}",
             player->GetName(), player->GetGUID().GetCounter(), playerLevel,
             count, proto->Name1, proto->ItemId, proto->RequiredLevel, gap,
-            source, lootguid.GetCounter(),
+            src.label, src.entry, src.spawnId,
             player->GetSession()->GetAccountId(), player->GetSession()->GetRemoteAddress());
 
 #ifdef HAS_CHAT_TRANSMITTER
@@ -642,31 +663,85 @@ public:
             "📦 **Underlevel loot** — requires level {}, looter level {} (gap {})\n"
             "👤 **{}** (GUID {}) | Account {} | IP {}\n"
             "🎁 Item: [{}](https://wowgaming.altervista.org/aowow/?item={}) (id {}) x{}\n"
-            "📍 Source: {} (GUID {})",
+            "📍 Source: {}",
             proto->RequiredLevel, playerLevel, gap,
             player->GetName(), player->GetGUID().GetCounter(),
             player->GetSession()->GetAccountId(), player->GetSession()->GetRemoteAddress(),
             proto->Name1, proto->ItemId, proto->ItemId, count,
-            source, lootguid.GetCounter());
+            FormatDiscordSource(src));
         sChatTransmitter->QueueNotification("ItemLoot", note);
 #endif
     }
 
 private:
-    static char const* LootSourceName(ObjectGuid guid)
+    struct LootSource
     {
-        if (guid.IsGameObject())
-            return "object/chest";
-        if (guid.IsCreature())
-            return "creature";
-        if (guid.IsItem())
-            return "container";
-        if (guid.IsCorpse())
-            return "corpse";
-        if (guid.IsPlayer())
-            return "player";
-        return "unknown source";
+        char const* label = "unknown source";
+        uint32 entry = 0;                // template entry, for the aowow link; 0 if unresolved
+        ObjectGuid::LowType spawnId = 0; // DB spawn id; 0 for temporary objects (e.g. fishing bobbers)
+        bool isCreature = false;
+        bool isGameObject = false;
+        bool isFishing = false;
+    };
+
+    // Resolves the live loot source on the player's map to recover its template
+    // entry and DB spawn id - the loot GUID itself is a transient runtime GUID,
+    // not the stable spawn id.
+    static LootSource ResolveLootSource(Player* player, ObjectGuid lootguid)
+    {
+        LootSource src;
+        Map* map = player->GetMap();
+
+        if (lootguid.IsGameObject())
+        {
+            src.isGameObject = true;
+            src.label = "object/chest";
+            if (GameObject* go = map->GetGameObject(lootguid))
+            {
+                src.entry = go->GetEntry();
+                src.spawnId = go->GetSpawnId();
+                GameobjectTypes const type = go->GetGoType();
+                src.isFishing = type == GAMEOBJECT_TYPE_FISHINGNODE || type == GAMEOBJECT_TYPE_FISHINGHOLE;
+            }
+        }
+        else if (lootguid.IsCreature())
+        {
+            src.isCreature = true;
+            src.label = "creature";
+            if (Creature* creature = map->GetCreature(lootguid))
+            {
+                src.entry = creature->GetEntry();
+                src.spawnId = creature->GetSpawnId();
+            }
+        }
+        else if (lootguid.IsItem())
+            src.label = "container";
+        else if (lootguid.IsCorpse())
+            src.label = "corpse";
+        else if (lootguid.IsPlayer())
+            src.label = "player";
+
+        return src;
     }
+
+#ifdef HAS_CHAT_TRANSMITTER
+    // Discord "Source" line, linking creatures/objects to their aowow page by
+    // template entry. Other sources (containers, corpses) carry no link.
+    static std::string FormatDiscordSource(LootSource const& src)
+    {
+        if (src.isCreature && src.entry)
+            return Acore::StringFormat(
+                "[{} #{}](https://wowgaming.altervista.org/aowow/?npc={}) (spawn {})",
+                src.label, src.entry, src.entry, src.spawnId);
+
+        if (src.isGameObject && src.entry)
+            return Acore::StringFormat(
+                "[{} #{}](https://wowgaming.altervista.org/aowow/?object={}) (spawn {})",
+                src.label, src.entry, src.entry, src.spawnId);
+
+        return std::string(src.label);
+    }
+#endif
 };
 
 void AddEnhancedSupportScripts()
