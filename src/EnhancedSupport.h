@@ -52,6 +52,10 @@ namespace EnhancedSupport
     // Money threshold (in copper) at/above which mail is logged; 0 disables the check.
     uint32 GetGoldFilterThreshold();
 
+    // Level gap between a looted item's required level and the looter's level at/above
+    // which the loot is logged; 0 disables the check.
+    uint32 GetLootFilterLevelGap();
+
     // Formats a copper amount as a "Xg Ys Zc" string.
     std::string FormatMoney(uint32 copper);
 

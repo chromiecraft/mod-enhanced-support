@@ -78,6 +78,17 @@ from a new player fails the web-marker gate; the spam line passes both. Matches
 reuse each filter's own action (`MailFilter.Action` / `ChatFilter.Action`). Set
 `AggressiveMaxLevel` to `0` to disable it.
 
+### Underlevel loot logger
+
+Logs when a character loots an item whose required level exceeds their own by at
+least `EnhancedSupport.LootFilter.LevelGap` levels, for example a level-5
+character pulling high-level gear from a world chest in Burning Steppes. Intended
+to surface boosting or loot exploits. This is log-only: the loot is never
+blocked, and items with no level requirement are ignored. Entries are written
+under `module.enhancedsupport` (and relayed to Discord when mod-chat-transmitter
+is available), and identify the looter, the item, the level gap and the loot
+source type (object/chest, creature, container, corpse, …).
+
 ### Startup Discord notice
 
 When enabled, posts a decorated Discord message once the world server has
@@ -113,6 +124,7 @@ Examples: `.support keyword add wowgold`, `.support list keywords`,
 | `EnhancedSupport.MailFilter.Action`  | `0`       | Match handling (0-4, see table above); also gated by `EnhancedSupport.Enable` |
 | `EnhancedSupport.MailFilter.Message` | (see conf)| System message shown to the sender when `Action = 1`; empty to send none  |
 | `EnhancedSupport.MailFilter.BanAuthor`| `SupportModule` | Author recorded on Action 3/4 bans; also the default `.support list bans` search term |
+| `EnhancedSupport.LootFilter.LevelGap` | `0`      | Log loot whose required level exceeds the looter's level by at least this gap; `0` disables |
 | `EnhancedSupport.StartupNotice.Enable` | `0`     | Post a Discord notice with the git revision on server start (needs mod-chat-transmitter) |
 | `EnhancedSupport.StartupNotice.Message`| `Server restarted!` | Headline for the startup notice; the full version line is shown below it in a code block |
 | `EnhancedSupport.StartupNotice.DelaySeconds`| `5`  | Seconds to wait after startup before sending, so the relay's WebSocket is up |
