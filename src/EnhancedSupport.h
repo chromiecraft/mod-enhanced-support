@@ -56,6 +56,9 @@ namespace EnhancedSupport
     // which the loot is logged; 0 disables the check.
     uint32 GetLootFilterLevelGap();
 
+    // Highest looter level the loot check applies to; 0 means no cap (all levels).
+    uint8 GetLootFilterMaxLevel();
+
     // Formats a copper amount as a "Xg Ys Zc" string.
     std::string FormatMoney(uint32 copper);
 

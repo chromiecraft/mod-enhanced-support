@@ -85,6 +85,10 @@ namespace
     // Surfaces low-level characters pulling high-level gear from world chests etc.
     uint32 _lootFilterLevelGap = 0;
 
+    // Restricts the loot check to looters at or below this level. 0 means no cap
+    // (applies to every level). Lets the check target only low-level characters.
+    uint8 _lootFilterMaxLevel = 0;
+
     bool _startupNoticeEnabled = false;
     std::string _startupNoticeMessage;
     uint32 _startupNoticeDelaySeconds = 5;
@@ -319,6 +323,11 @@ namespace EnhancedSupport
         return _lootFilterLevelGap;
     }
 
+    uint8 GetLootFilterMaxLevel()
+    {
+        return _lootFilterMaxLevel;
+    }
+
     std::string FormatMoney(uint32 copper)
     {
         return Acore::StringFormat("{}g {}s {}c", copper / GOLD, (copper % GOLD) / SILVER, copper % SILVER);
@@ -353,6 +362,7 @@ namespace EnhancedSupport
             _goldFilterThresholdCopper = *parsed > 0 ? static_cast<uint32>(*parsed) : 0;
 
         _lootFilterLevelGap = sConfigMgr->GetOption<uint32>("EnhancedSupport.LootFilter.LevelGap", 0);
+        _lootFilterMaxLevel = sConfigMgr->GetOption<uint8>("EnhancedSupport.LootFilter.MaxLevel", 0);
 
         _startupNoticeEnabled = sConfigMgr->GetOption<bool>("EnhancedSupport.StartupNotice.Enable", false);
         _startupNoticeMessage = sConfigMgr->GetOption<std::string>("EnhancedSupport.StartupNotice.Message", "Server restarted!");
@@ -621,6 +631,9 @@ public:
             return;
 
         uint32 const playerLevel = player->GetLevel();
+        if (_lootFilterMaxLevel != 0 && playerLevel > _lootFilterMaxLevel)
+            return;
+
         if (proto->RequiredLevel <= playerLevel)
             return;
 

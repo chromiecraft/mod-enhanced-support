@@ -121,6 +121,18 @@ EnhancedSupport.GoldFilter.Threshold = "0"
 EnhancedSupport.LootFilter.LevelGap = 0
 
 #
+#    EnhancedSupport.LootFilter.MaxLevel
+#        Description: Restrict the loot level-gap check (above) to looters at or below this
+#                     level, so it only watches low-level characters. For example, 10 logs
+#                     only characters up to level 10. Has no effect unless
+#                     EnhancedSupport.LootFilter.LevelGap is enabled.
+#        Default:     0 - No cap (the check applies to looters of any level)
+#                     e.g. 10 - Apply only to characters at or below level 10
+#
+
+EnhancedSupport.LootFilter.MaxLevel = 0
+
+#
 #    EnhancedSupport.StartupNotice.Enable
 #        Description: Post a Discord notice when the world server has started, showing the
 #                     git revision the server is running. Requires mod-chat-transmitter to

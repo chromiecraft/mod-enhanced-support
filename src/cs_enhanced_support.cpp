@@ -89,7 +89,15 @@ public:
         if (lootLevelGap == 0)
             handler->SendSysMessage("  Loot filter level gap: disabled");
         else
+        {
             handler->PSendSysMessage("  Loot filter level gap: {}", lootLevelGap);
+
+            uint8 const lootMaxLevel = EnhancedSupport::GetLootFilterMaxLevel();
+            if (lootMaxLevel == 0)
+                handler->SendSysMessage("  Loot filter max level: no cap (all levels)");
+            else
+                handler->PSendSysMessage("  Loot filter max level: {}", static_cast<uint32>(lootMaxLevel));
+        }
 
         handler->PSendSysMessage("  Ban author: {}", EnhancedSupport::GetBanAuthor());
 
