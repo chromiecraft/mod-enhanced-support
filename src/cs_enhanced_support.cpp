@@ -71,6 +71,14 @@ public:
             static_cast<uint32>(EnhancedSupport::GetMailFilterAction()), EnhancedSupport::GetMailFilterActionName());
         handler->PSendSysMessage("  Chat filter action: {} ({})",
             static_cast<uint32>(EnhancedSupport::GetChatFilterAction()), EnhancedSupport::GetChatFilterActionName());
+
+        uint8 const aggressiveMaxLevel = EnhancedSupport::GetAggressiveMaxLevel();
+        if (aggressiveMaxLevel == 0)
+            handler->PSendSysMessage("  Aggressive pass: disabled");
+        else
+            handler->PSendSysMessage("  Aggressive pass: enabled for level <= {}",
+                static_cast<uint32>(aggressiveMaxLevel));
+
         handler->PSendSysMessage("  Keywords loaded: {}", EnhancedSupport::GetKeywords().size());
 
         uint32 const goldThreshold = EnhancedSupport::GetGoldFilterThreshold();

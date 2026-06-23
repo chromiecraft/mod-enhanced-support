@@ -32,6 +32,7 @@
 #include "WorldSession.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <chrono>
 
@@ -67,6 +68,11 @@ namespace
     uint8 _chatFilterAction = MAIL_FILTER_DISABLED;
     std::string _chatFilterMessage;
 
+    // Aggressive (whitespace-collapsed) matching for mail and chat only runs for
+    // senders at or below this level whose text also carries a URL marker. 0
+    // disables it. Matches reuse each filter's own action.
+    uint8 _aggressiveMaxLevel = 0;
+
     // Mail carrying at least this much money (in copper) is logged (and relayed
     // to Discord). 0 disables the check. Parsed from a g/s/c money string.
     uint32 _goldFilterThresholdCopper = 0;
@@ -97,6 +103,55 @@ namespace
         }
 
         return {};
+    }
+
+    std::string StripWhitespace(std::string const& input)
+    {
+        std::string out;
+        out.reserve(input.size());
+        for (char c : input)
+        {
+            if (!std::isspace(static_cast<unsigned char>(c)))
+                out.push_back(c);
+        }
+
+        return out;
+    }
+
+    // True if the (lowercased, whitespace-stripped) text carries a web/contact
+    // marker. Used as the second signal for aggressive matching so that a
+    // collapsed keyword hit alone (a despaced phrase can fuse into a real word)
+    // isn't enough.
+    bool HasUrlMarker(std::string const& collapsed)
+    {
+        static constexpr std::array<std::string_view, 9> markers =
+        {
+            "http", "www", "wvvw", ".com", ".net", ".org", "dotcom", "dotnet", "dotorg"
+        };
+
+        for (std::string_view marker : markers)
+        {
+            if (collapsed.find(marker) != std::string::npos)
+                return true;
+        }
+
+        return false;
+    }
+
+    // Aggressive pass shared by the mail and chat filters: catches space-evaded
+    // keywords, but only for a low-level sender whose text also carries a URL
+    // marker. Both signals are required to keep despaced normal phrases from
+    // matching. Returns the matched keyword, or empty.
+    std::string FindAggressiveMatch(Player* player, std::string const& text)
+    {
+        if (_aggressiveMaxLevel == 0 || player->GetLevel() > _aggressiveMaxLevel)
+            return {};
+
+        std::string const collapsed = StripWhitespace(ToLowerAscii(text));
+        if (!HasUrlMarker(collapsed))
+            return {};
+
+        return FindMatchingKeyword(collapsed);
     }
 
     // Carries out the escalating punishment for a keyword match. The caller is
@@ -241,6 +296,11 @@ namespace EnhancedSupport
         return GetFilterActionName(_chatFilterAction);
     }
 
+    uint8 GetAggressiveMaxLevel()
+    {
+        return _aggressiveMaxLevel;
+    }
+
     uint32 GetGoldFilterThreshold()
     {
         return _goldFilterThresholdCopper;
@@ -262,6 +322,7 @@ namespace EnhancedSupport
         _chatFilterAction = sConfigMgr->GetOption<uint8>("EnhancedSupport.ChatFilter.Action", MAIL_FILTER_DISABLED);
         _chatFilterMessage = sConfigMgr->GetOption<std::string>("EnhancedSupport.ChatFilter.Message",
             "Your message was blocked because it contains a prohibited keyword.");
+        _aggressiveMaxLevel = sConfigMgr->GetOption<uint8>("EnhancedSupport.AggressiveMaxLevel", 0);
 
         // Accepts a g/s/c money string ("100g", "50g 30s") like the .send money
         // command; a bare number is copper. 0 (or unparseable) disables the check.
@@ -365,28 +426,39 @@ public:
         if (_mailFilterAction == MAIL_FILTER_DISABLED || _mailFilterKeywords.empty())
             return true;
 
-        std::string const matched = FindMatchingKeyword(subject + '\n' + body);
+        std::string const text = subject + '\n' + body;
+        std::string matched = FindMatchingKeyword(text);
+        bool aggressive = false;
+
+        // Aggressive collapsed match for low-level senders (see helper).
+        if (matched.empty())
+        {
+            matched = FindAggressiveMatch(player, text);
+            if (!matched.empty())
+                aggressive = true;
+        }
+
         if (matched.empty())
             return true;
 
         std::string const receiverName = ResolveCharacterName(receiverGuid);
 
         LOG_INFO("module.enhancedsupport",
-            "MailFilter: blocked mail from {} ({}) to {} ({}) - matched keyword '{}', action {} | subject: \"{}\" | body: \"{}\"",
-            player->GetName(), player->GetGUID().GetCounter(),
+            "MailFilter: blocked mail from {} ({}, level {}) to {} ({}) - matched keyword '{}', layer {}, action {} | subject: \"{}\" | body: \"{}\"",
+            player->GetName(), player->GetGUID().GetCounter(), static_cast<uint32>(player->GetLevel()),
             receiverName, receiverGuid.GetCounter(), matched,
-            static_cast<uint32>(_mailFilterAction), subject, body);
+            aggressive ? "aggressive" : "strict", static_cast<uint32>(_mailFilterAction), subject, body);
 
 #ifdef HAS_CHAT_TRANSMITTER
         {
             std::string note = Acore::StringFormat(
-                "🚫 **Mail blocked** — keyword `{}`, action `{}`\n"
-                "👤 From: **{}** (GUID {}) | Account {} | IP {}\n"
+                "🚫 **Mail blocked** — keyword `{}`, {} layer, action `{}`\n"
+                "👤 From: **{}** (GUID {}, level {}) | Account {} | IP {}\n"
                 "📬 To: **{}** (GUID {})\n"
                 "✉️ Subject: {}\n"
                 "📝 Body: {}",
-                matched, EnhancedSupport::GetMailFilterActionName(),
-                player->GetName(), player->GetGUID().GetCounter(),
+                matched, aggressive ? "aggressive" : "strict", EnhancedSupport::GetMailFilterActionName(),
+                player->GetName(), player->GetGUID().GetCounter(), static_cast<uint32>(player->GetLevel()),
                 player->GetSession()->GetAccountId(), player->GetSession()->GetRemoteAddress(),
                 receiverName, receiverGuid.GetCounter(),
                 subject, body);
@@ -457,24 +529,36 @@ public:
         if (type != CHAT_MSG_SAY && type != CHAT_MSG_YELL && type != CHAT_MSG_EMOTE)
             return;
 
-        std::string const matched = FindMatchingKeyword(msg);
+        // Layer 1: strict contiguous match, applies to every sender.
+        std::string matched = FindMatchingKeyword(msg);
+        bool aggressive = false;
+
+        // Layer 2: aggressive collapsed match for low-level senders (see helper).
+        if (matched.empty())
+        {
+            matched = FindAggressiveMatch(player, msg);
+            if (!matched.empty())
+                aggressive = true;
+        }
+
         if (matched.empty())
             return;
 
         LOG_INFO("module.enhancedsupport",
-            "ChatFilter: blocked {} from {} ({}) - matched keyword '{}', action {} | message: \"{}\"",
-            ChatTypeName(type), player->GetName(), player->GetGUID().GetCounter(), matched,
-            static_cast<uint32>(_chatFilterAction), msg);
+            "ChatFilter: blocked {} from {} ({}, level {}) - matched keyword '{}', layer {}, action {} | message: \"{}\"",
+            ChatTypeName(type), player->GetName(), player->GetGUID().GetCounter(),
+            static_cast<uint32>(player->GetLevel()), matched,
+            aggressive ? "aggressive" : "strict", static_cast<uint32>(_chatFilterAction), msg);
 
 #ifdef HAS_CHAT_TRANSMITTER
         {
             std::string note = Acore::StringFormat(
-                "🚫 **Chat blocked** — keyword `{}`, action `{}`\n"
-                "👤 From: **{}** (GUID {}) | Account {} | IP {}\n"
+                "🚫 **Chat blocked** — keyword `{}`, {} layer, action `{}`\n"
+                "👤 From: **{}** (GUID {}, level {}) | Account {} | IP {}\n"
                 "💬 Channel: {}\n"
                 "📝 Message: {}",
-                matched, EnhancedSupport::GetChatFilterActionName(),
-                player->GetName(), player->GetGUID().GetCounter(),
+                matched, aggressive ? "aggressive" : "strict", EnhancedSupport::GetChatFilterActionName(),
+                player->GetName(), player->GetGUID().GetCounter(), static_cast<uint32>(player->GetLevel()),
                 player->GetSession()->GetAccountId(), player->GetSession()->GetRemoteAddress(),
                 ChatTypeName(type), msg);
             sChatTransmitter->QueueNotification("ChatFilter", note);
