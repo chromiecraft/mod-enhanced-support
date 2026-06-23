@@ -22,7 +22,10 @@
 #include "Config.h"
 #include "DatabaseEnv.h"
 #include "GitRevision.h"
+#include "Item.h"
+#include "ItemTemplate.h"
 #include "Log.h"
+#include "ObjectGuid.h"
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "StringConvert.h"
@@ -76,6 +79,11 @@ namespace
     // Mail carrying at least this much money (in copper) is logged (and relayed
     // to Discord). 0 disables the check. Parsed from a g/s/c money string.
     uint32 _goldFilterThresholdCopper = 0;
+
+    // Looting an item whose RequiredLevel exceeds the looter's level by at least
+    // this many levels is logged (and relayed to Discord). 0 disables the check.
+    // Surfaces low-level characters pulling high-level gear from world chests etc.
+    uint32 _lootFilterLevelGap = 0;
 
     bool _startupNoticeEnabled = false;
     std::string _startupNoticeMessage;
@@ -306,6 +314,11 @@ namespace EnhancedSupport
         return _goldFilterThresholdCopper;
     }
 
+    uint32 GetLootFilterLevelGap()
+    {
+        return _lootFilterLevelGap;
+    }
+
     std::string FormatMoney(uint32 copper)
     {
         return Acore::StringFormat("{}g {}s {}c", copper / GOLD, (copper % GOLD) / SILVER, copper % SILVER);
@@ -338,6 +351,8 @@ namespace EnhancedSupport
         }
         else
             _goldFilterThresholdCopper = *parsed > 0 ? static_cast<uint32>(*parsed) : 0;
+
+        _lootFilterLevelGap = sConfigMgr->GetOption<uint32>("EnhancedSupport.LootFilter.LevelGap", 0);
 
         _startupNoticeEnabled = sConfigMgr->GetOption<bool>("EnhancedSupport.StartupNotice.Enable", false);
         _startupNoticeMessage = sConfigMgr->GetOption<std::string>("EnhancedSupport.StartupNotice.Message", "Server restarted!");
@@ -586,9 +601,78 @@ private:
     }
 };
 
+// Logs (without blocking) when a character loots an item whose required level
+// sits far above their own - e.g. a level-5 character pulling high-level gear
+// from a world chest. Log-only; intended to surface boosting or exploits.
+class EnhancedSupportLootFilter : public PlayerScript
+{
+public:
+    EnhancedSupportLootFilter() : PlayerScript("EnhancedSupportLootFilter", {
+        PLAYERHOOK_ON_LOOT_ITEM
+    }) { }
+
+    void OnPlayerLootItem(Player* player, Item* item, uint32 count, ObjectGuid lootguid) override
+    {
+        if (!_enabled || _lootFilterLevelGap == 0 || !item)
+            return;
+
+        ItemTemplate const* proto = item->GetTemplate();
+        if (!proto || proto->RequiredLevel == 0)
+            return;
+
+        uint32 const playerLevel = player->GetLevel();
+        if (proto->RequiredLevel <= playerLevel)
+            return;
+
+        uint32 const gap = proto->RequiredLevel - playerLevel;
+        if (gap < _lootFilterLevelGap)
+            return;
+
+        char const* source = LootSourceName(lootguid);
+
+        LOG_INFO("module.enhancedsupport",
+            "LootFilter: {} ({}, level {}) looted {}x [{}] ({}, requires level {}, gap {}) from {} {} | Account {} | IP {}",
+            player->GetName(), player->GetGUID().GetCounter(), playerLevel,
+            count, proto->Name1, proto->ItemId, proto->RequiredLevel, gap,
+            source, lootguid.GetCounter(),
+            player->GetSession()->GetAccountId(), player->GetSession()->GetRemoteAddress());
+
+#ifdef HAS_CHAT_TRANSMITTER
+        std::string note = Acore::StringFormat(
+            "📦 **Underlevel loot** — requires level {}, looter level {} (gap {})\n"
+            "👤 **{}** (GUID {}) | Account {} | IP {}\n"
+            "🎁 Item: [{}](https://wowgaming.altervista.org/aowow/?item={}) (id {}) x{}\n"
+            "📍 Source: {} (GUID {})",
+            proto->RequiredLevel, playerLevel, gap,
+            player->GetName(), player->GetGUID().GetCounter(),
+            player->GetSession()->GetAccountId(), player->GetSession()->GetRemoteAddress(),
+            proto->Name1, proto->ItemId, proto->ItemId, count,
+            source, lootguid.GetCounter());
+        sChatTransmitter->QueueNotification("ItemLoot", note);
+#endif
+    }
+
+private:
+    static char const* LootSourceName(ObjectGuid guid)
+    {
+        if (guid.IsGameObject())
+            return "object/chest";
+        if (guid.IsCreature())
+            return "creature";
+        if (guid.IsItem())
+            return "container";
+        if (guid.IsCorpse())
+            return "corpse";
+        if (guid.IsPlayer())
+            return "player";
+        return "unknown source";
+    }
+};
+
 void AddEnhancedSupportScripts()
 {
     new EnhancedSupportWorldScript();
     new EnhancedSupportMailFilter();
     new EnhancedSupportChatFilter();
+    new EnhancedSupportLootFilter();
 }

@@ -85,6 +85,12 @@ public:
         handler->PSendSysMessage("  Gold filter threshold: {}",
             goldThreshold == 0 ? "disabled" : EnhancedSupport::FormatMoney(goldThreshold));
 
+        uint32 const lootLevelGap = EnhancedSupport::GetLootFilterLevelGap();
+        if (lootLevelGap == 0)
+            handler->SendSysMessage("  Loot filter level gap: disabled");
+        else
+            handler->PSendSysMessage("  Loot filter level gap: {}", lootLevelGap);
+
         handler->PSendSysMessage("  Ban author: {}", EnhancedSupport::GetBanAuthor());
 
         std::string const& message = EnhancedSupport::GetMailFilterMessage();

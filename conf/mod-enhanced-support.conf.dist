@@ -108,6 +108,19 @@ EnhancedSupport.AggressiveMaxLevel = 0
 EnhancedSupport.GoldFilter.Threshold = "0"
 
 #
+#    EnhancedSupport.LootFilter.LevelGap
+#        Description: Log (and relay to Discord, if mod-chat-transmitter is available) when a
+#                     character loots an item whose required level exceeds their own level by
+#                     at least this many levels. Intended to surface low-level characters
+#                     pulling high-level gear from world chests and similar (boosting/exploits).
+#                     Log-only: the loot is never blocked. Also gated by EnhancedSupport.Enable.
+#                     Items with no level requirement are ignored.
+#        Default:     0 - Disabled (no loot level check)
+#
+
+EnhancedSupport.LootFilter.LevelGap = 0
+
+#
 #    EnhancedSupport.StartupNotice.Enable
 #        Description: Post a Discord notice when the world server has started, showing the
 #                     git revision the server is running. Requires mod-chat-transmitter to
