@@ -652,13 +652,23 @@ public:
             return;
 
         LOG_INFO("module.enhancedsupport",
-            "LootFilter: {} ({}, level {}) looted {}x [{}] ({}, requires level {}, gap {}) from {} (entry {}, spawn {}) | Account {} | IP {}",
+            "LootFilter: {} ({}, level {}) looted {}x [{}] ({}, requires level {}, gap {}) from {} {} (entry {}, spawn {}) | Account {} | IP {}",
             player->GetName(), player->GetGUID().GetCounter(), playerLevel,
             count, proto->Name1, proto->ItemId, proto->RequiredLevel, gap,
-            src.label, src.entry, src.spawnId,
+            src.label, src.name, src.entry, src.spawnId,
             player->GetSession()->GetAccountId(), player->GetSession()->GetRemoteAddress());
 
 #ifdef HAS_CHAT_TRANSMITTER
+        std::string sourceLine = FormatDiscordSource(src);
+
+        // No entry means no aowow link (despawned source, container, corpse,
+        // player); give the GM a ready-to-paste teleport to the looter instead.
+        if (!src.entry)
+            sourceLine += Acore::StringFormat(
+                "\n🧭 Looter at: `.go xyz {:.3f} {:.3f} {:.3f} {} {:.3f}`",
+                player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
+                player->GetMapId(), player->GetOrientation());
+
         std::string note = Acore::StringFormat(
             "📦 **Underlevel loot** — requires level {}, looter level {} (gap {})\n"
             "👤 **{}** (GUID {}) | Account {} | IP {}\n"
@@ -668,7 +678,7 @@ public:
             player->GetName(), player->GetGUID().GetCounter(),
             player->GetSession()->GetAccountId(), player->GetSession()->GetRemoteAddress(),
             proto->Name1, proto->ItemId, proto->ItemId, count,
-            FormatDiscordSource(src));
+            sourceLine);
         sChatTransmitter->QueueNotification("ItemLoot", note);
 #endif
     }
@@ -677,6 +687,7 @@ private:
     struct LootSource
     {
         char const* label = "unknown source";
+        std::string name;                // creature/object name; empty if unresolved
         uint32 entry = 0;                // template entry, for the aowow link; 0 if unresolved
         ObjectGuid::LowType spawnId = 0; // DB spawn id; 0 for temporary objects (e.g. fishing bobbers)
         bool isCreature = false;
@@ -700,6 +711,7 @@ private:
             {
                 src.entry = go->GetEntry();
                 src.spawnId = go->GetSpawnId();
+                src.name = go->GetName();
                 GameobjectTypes const type = go->GetGoType();
                 src.isFishing = type == GAMEOBJECT_TYPE_FISHINGNODE || type == GAMEOBJECT_TYPE_FISHINGHOLE;
             }
@@ -712,6 +724,7 @@ private:
             {
                 src.entry = creature->GetEntry();
                 src.spawnId = creature->GetSpawnId();
+                src.name = creature->GetName();
             }
         }
         else if (lootguid.IsItem())
@@ -731,13 +744,13 @@ private:
     {
         if (src.isCreature && src.entry)
             return Acore::StringFormat(
-                "[{} #{}](https://wowgaming.altervista.org/aowow/?npc={}) (spawn {})",
-                src.label, src.entry, src.entry, src.spawnId);
+                "{} [{} #{}](https://wowgaming.altervista.org/aowow/?npc={}) (spawn {})",
+                src.label, src.name, src.entry, src.entry, src.spawnId);
 
         if (src.isGameObject && src.entry)
             return Acore::StringFormat(
-                "[{} #{}](https://wowgaming.altervista.org/aowow/?object={}) (spawn {})",
-                src.label, src.entry, src.entry, src.spawnId);
+                "{} [{} #{}](https://wowgaming.altervista.org/aowow/?object={}) (spawn {})",
+                src.label, src.name, src.entry, src.entry, src.spawnId);
 
         return std::string(src.label);
     }
