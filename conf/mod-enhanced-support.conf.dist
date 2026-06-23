@@ -80,6 +80,21 @@ EnhancedSupport.ChatFilter.Action = 0
 EnhancedSupport.ChatFilter.Message = "Your message was blocked because it contains a prohibited keyword."
 
 #
+#    EnhancedSupport.AggressiveMaxLevel
+#        Description: Catches space-evaded spam (e.g. "B U Y G O L D . C O M") in both mail
+#                     and chat, but only from low-level senders (gold-seller bots are
+#                     throwaway low-level characters) whose text also contains a web marker
+#                     (.com, www, http, "dot com", ...). Both conditions are required, which
+#                     keeps normal phrases like "LFG tank for Onyxia" from matching. Set to
+#                     the highest character level this aggressive pass applies to. Matches
+#                     reuse each filter's own action (MailFilter.Action / ChatFilter.Action).
+#        Default:     0 - Disabled (no aggressive pass; only exact substring matching runs)
+#                     e.g. 5 - Apply to characters at or below level 5
+#
+
+EnhancedSupport.AggressiveMaxLevel = 0
+
+#
 #    EnhancedSupport.GoldFilter.Threshold
 #        Description: Log (and relay to Discord, if mod-chat-transmitter is available) any
 #                     player-to-player mail carrying at least this much money. Intended to

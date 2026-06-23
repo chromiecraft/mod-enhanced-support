@@ -56,6 +56,28 @@ removed regardless.
 | `3`    | Block message + permanently ban the sender's account    |
 | `4`    | Block message + permanently ban the account and its IP  |
 
+### Aggressive low-level pass
+
+Both the mail and chat filters match keywords as contiguous substrings, so
+spammers evade them by spacing letters out (`B U Y G O L D . C O M`). Collapsing
+whitespace before matching would catch that, but it also fuses perfectly normal
+phrases: a group-finding message typed with spaces collapses into a single solid
+token that can contain a blocked keyword as a substring, false-positiving
+legitimate chat.
+
+The aggressive pass (`EnhancedSupport.AggressiveMaxLevel`) runs the
+whitespace-collapsed match for both mail and chat, but only when **both** of
+these hold:
+
+- the sender is at or below the configured level (gold bots are throwaway
+  low-level characters; real raiders advertising `LFG tank for Onyxia` are not), and
+- the text also contains a web marker (`.com`, `www`, `http`, `dot com`, ...).
+
+`LFG tank for Onyxia` from a level 70 fails the level gate; `LFG tank for RFC`
+from a new player fails the web-marker gate; the spam line passes both. Matches
+reuse each filter's own action (`MailFilter.Action` / `ChatFilter.Action`). Set
+`AggressiveMaxLevel` to `0` to disable it.
+
 ### Startup Discord notice
 
 When enabled, posts a decorated Discord message once the world server has
