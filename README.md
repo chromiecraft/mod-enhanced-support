@@ -110,9 +110,9 @@ blocked. Items with no level requirement are ignored, as is anything pulled from
 a fishing bobber or fishing hole (fish are caught above your level by design).
 Entries are written under `module.enhancedsupport` (and relayed to Discord when
 mod-chat-transmitter is available), and identify the looter, the item, the level
-gap and the loot source (its type, template entry and DB spawn id). In the
-Discord notice the item and the source creature/object are linked to their aowow
-database pages.
+gap, the loot source (its type, template entry and DB spawn id), the looter's
+zone/subarea and whether they were in a group at the time. In the Discord notice
+the item and the source creature/object are linked to their aowow database pages.
 
 `EnhancedSupport.LootFilter.MaxLevel` optionally caps the check to looters at or
 below a given level (e.g. `10` to watch only characters up to level 10); `0`

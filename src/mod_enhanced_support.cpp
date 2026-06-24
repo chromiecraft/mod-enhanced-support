@@ -21,6 +21,7 @@
 #include "Chat.h"
 #include "Config.h"
 #include "Creature.h"
+#include "DBCStores.h"
 #include "DatabaseEnv.h"
 #include "GameObject.h"
 #include "GameTime.h"
@@ -777,15 +778,19 @@ public:
         if (src.isFishing)
             return;
 
+        std::string const location = ResolveLocation(player);
+        bool const inGroup = player->GetGroup() != nullptr;
+
         LOG_INFO("module.enhancedsupport",
-            "LootFilter: {} ({}, level {}) looted {}x [{}] ({}, requires level {}, gap {}) from {} {} (entry {}, spawn {}) | Account {} | IP {}",
+            "LootFilter: {} ({}, level {}) looted {}x [{}] ({}, requires level {}, gap {}) from {} {} (entry {}, spawn {}) at {} | {} | Account {} | IP {}",
             player->GetName(), player->GetGUID().GetCounter(), playerLevel,
             count, proto->Name1, proto->ItemId, proto->RequiredLevel, gap,
-            src.label, src.name, src.entry, src.spawnId,
+            src.label, src.name, src.entry, src.spawnId, location,
+            inGroup ? "in group" : "not in group",
             player->GetSession()->GetAccountId(), player->GetSession()->GetRemoteAddress());
 
 #ifdef HAS_CHAT_TRANSMITTER
-        std::string sourceLine = FormatDiscordSource(src);
+        std::string sourceLine = Acore::StringFormat("{} | 🗺️ {}", FormatDiscordSource(src), location);
 
         // No entry means no aowow link (despawned source, container, corpse,
         // player); give the GM a ready-to-paste teleport to the looter instead.
@@ -797,12 +802,13 @@ public:
 
         std::string note = Acore::StringFormat(
             "📦 **Underlevel loot** — requires level {}, looter level {} (gap {})\n"
-            "👤 **{}** (GUID {}) | Account {} | IP {}\n"
+            "👤 **{}** (GUID {}) | Account {} | IP {} | {}\n"
             "🎁 Item: [{}](https://wowgaming.altervista.org/aowow/?item={}) (id {}) x{}\n"
             "📍 Source: {}",
             proto->RequiredLevel, playerLevel, gap,
             player->GetName(), player->GetGUID().GetCounter(),
             player->GetSession()->GetAccountId(), player->GetSession()->GetRemoteAddress(),
+            inGroup ? "👥 in group" : "🧍 solo",
             proto->Name1, proto->ItemId, proto->ItemId, count,
             sourceLine);
         sChatTransmitter->QueueNotification("ItemLoot", note);
@@ -861,6 +867,24 @@ private:
             src.label = "player";
 
         return src;
+    }
+
+    // "Zone - Subarea" for the looter's position, resolved the same way as the
+    // .pinfo command: the area's parent zone is the broad zone, the area itself
+    // the subarea (omitted when the player is directly in a top-level zone).
+    static std::string ResolveLocation(Player* player)
+    {
+        LocaleConstant const locale = player->GetSession()->GetSessionDbcLocale();
+
+        AreaTableEntry const* area = sAreaTableStore.LookupEntry(player->GetAreaId());
+        if (!area)
+            return "unknown";
+
+        std::string zoneName = area->area_name[locale];
+        if (AreaTableEntry const* zone = sAreaTableStore.LookupEntry(area->zone))
+            return Acore::StringFormat("{} - {}", zone->area_name[locale], zoneName);
+
+        return zoneName;
     }
 
 #ifdef HAS_CHAT_TRANSMITTER
