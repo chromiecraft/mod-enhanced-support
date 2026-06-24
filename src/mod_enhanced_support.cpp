@@ -24,6 +24,7 @@
 #include "DatabaseEnv.h"
 #include "GameObject.h"
 #include "GitRevision.h"
+#include "Group.h"
 #include "Item.h"
 #include "ItemTemplate.h"
 #include "Log.h"
@@ -539,24 +540,49 @@ private:
     }
 };
 
-// Filters player SAY/YELL/EMOTE against the same keyword list as the mail filter.
-// OnPlayerBeforeSendChatMessage is the only chat hook the core fires for these
-// types, and it can't abort the broadcast, so a matched message is blanked.
+// Filters player chat against the same keyword list as the mail filter. SAY/YELL/
+// EMOTE arrive via OnPlayerBeforeSendChatMessage, which can't abort the broadcast,
+// so a matched message is blanked. Party chat arrives via OnPlayerCanUseChat, a
+// boolean hook that aborts the broadcast outright when we return false.
 class EnhancedSupportChatFilter : public PlayerScript
 {
 public:
     EnhancedSupportChatFilter() : PlayerScript("EnhancedSupportChatFilter", {
-        PLAYERHOOK_ON_BEFORE_SEND_CHAT_MESSAGE
+        PLAYERHOOK_ON_BEFORE_SEND_CHAT_MESSAGE,
+        PLAYERHOOK_CAN_PLAYER_USE_GROUP_CHAT
     }) { }
 
     void OnPlayerBeforeSendChatMessage(Player* player, uint32& type, uint32& /*lang*/, std::string& msg) override
     {
-        if (!_enabled || _chatFilterAction == MAIL_FILTER_DISABLED || _mailFilterKeywords.empty())
+        if (!FilterEnabled() || (type != CHAT_MSG_SAY && type != CHAT_MSG_YELL && type != CHAT_MSG_EMOTE))
             return;
 
-        if (type != CHAT_MSG_SAY && type != CHAT_MSG_YELL && type != CHAT_MSG_EMOTE)
-            return;
+        // This hook runs before the message is broadcast but can't stop it, so
+        // clear the text to keep the prohibited content from reaching others.
+        if (FilterMessage(player, type, msg))
+            msg.clear();
+    }
 
+    bool OnPlayerCanUseChat(Player* player, uint32 type, uint32 /*lang*/, std::string& msg, Group* /*group*/) override
+    {
+        if (!FilterEnabled() || (type != CHAT_MSG_PARTY && type != CHAT_MSG_PARTY_LEADER))
+            return true;
+
+        // Returning false aborts the broadcast, so no need to blank the text.
+        return !FilterMessage(player, type, msg);
+    }
+
+private:
+    static bool FilterEnabled()
+    {
+        return _enabled && _chatFilterAction != MAIL_FILTER_DISABLED && !_mailFilterKeywords.empty();
+    }
+
+    // Runs both match layers over a chat message; on a hit it logs, relays to
+    // Discord and applies the configured action. Returns true if the message
+    // matched and must be suppressed by the caller.
+    static bool FilterMessage(Player* player, uint32 type, std::string const& msg)
+    {
         // Layer 1: strict contiguous match, applies to every sender.
         std::string matched = FindMatchingKeyword(msg);
         bool aggressive = false;
@@ -570,7 +596,7 @@ public:
         }
 
         if (matched.empty())
-            return;
+            return false;
 
         LOG_INFO("module.enhancedsupport",
             "ChatFilter: blocked {} from {} ({}, level {}) - matched keyword '{}', layer {}, action {} | message: \"{}\"",
@@ -593,23 +619,22 @@ public:
         }
 #endif
 
-        // This hook runs before the message is broadcast but can't stop it, so
-        // clear the text to keep the prohibited content from reaching others.
-        msg.clear();
-
         ApplyFilterAction(player, _chatFilterAction, _chatFilterMessage,
             "EnhancedSupport: prohibited chat content", CHAT_FILTER_BAN_REASON);
+
+        return true;
     }
 
-private:
     static char const* ChatTypeName(uint32 type)
     {
         switch (type)
         {
-            case CHAT_MSG_SAY:  return "say";
-            case CHAT_MSG_YELL: return "yell";
-            case CHAT_MSG_EMOTE: return "emote";
-            default:            return "chat";
+            case CHAT_MSG_SAY:          return "say";
+            case CHAT_MSG_YELL:         return "yell";
+            case CHAT_MSG_EMOTE:        return "emote";
+            case CHAT_MSG_PARTY:        return "party";
+            case CHAT_MSG_PARTY_LEADER: return "party leader";
+            default:                    return "chat";
         }
     }
 };

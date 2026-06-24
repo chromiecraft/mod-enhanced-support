@@ -38,15 +38,16 @@ The `Action` option controls how matches are handled:
 
 ### Chat keyword filter
 
-Scans player `SAY`, `YELL` and `EMOTE` messages against the same keyword list as
-the mail filter (case-insensitive substring match) and applies the same
+Scans player `SAY`, `YELL`, `EMOTE` and `PARTY` messages against the same keyword
+list as the mail filter (case-insensitive substring match) and applies the same
 escalating actions, configured separately via `EnhancedSupport.ChatFilter.Action`.
 Blocked messages are logged under `module.enhancedsupport`.
 
-The chat hook the core exposes for these message types runs before the message
-is broadcast but cannot abort it, so a matched message has its text cleared
-rather than being dropped outright; with the kick/ban actions the sender is
-removed regardless.
+The `SAY`/`YELL`/`EMOTE` hook the core exposes runs before the message is
+broadcast but cannot abort it, so a matched message has its text cleared rather
+than being dropped outright. Party chat uses a separate hook that does abort the
+broadcast, so a matched party message is dropped entirely. With the kick/ban
+actions the sender is removed regardless.
 
 | Action | Behaviour                                               |
 | ------ | ------------------------------------------------------- |
