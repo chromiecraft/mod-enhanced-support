@@ -23,6 +23,7 @@
 #include "Creature.h"
 #include "DatabaseEnv.h"
 #include "GameObject.h"
+#include "GameTime.h"
 #include "GitRevision.h"
 #include "Group.h"
 #include "Item.h"
@@ -42,6 +43,9 @@
 #include <array>
 #include <cctype>
 #include <chrono>
+#include <ctime>
+#include <deque>
+#include <unordered_map>
 
 // Optional integration: relay blocked-mail events to Discord via mod-chat-transmitter.
 #if __has_include("mod-chat-transmitter/src/ChatTransmitter.h")
@@ -79,6 +83,15 @@ namespace
     // senders at or below this level whose text also carries a URL marker. 0
     // disables it. Matches reuse each filter's own action.
     uint8 _aggressiveMaxLevel = 0;
+
+    // Cross-message (windowed) chat matching joins a sender's recent SAY/YELL/
+    // EMOTE lines and matches the combined text, to catch ads split over several
+    // messages so that no single line carries a complete URL. Size is the max
+    // number of lines kept per sender; Seconds is how long a line stays in the window.
+    // Both must be > 0 (and Size >= 2) for the pass to run; it is additionally
+    // gated by _aggressiveMaxLevel, so only low-level senders are joined.
+    uint32 _chatWindowSize = 0;
+    uint32 _chatWindowSeconds = 0;
 
     // Mail carrying at least this much money (in copper) is logged (and relayed
     // to Discord). 0 disables the check. Parsed from a g/s/c money string.
@@ -168,6 +181,62 @@ namespace
             return {};
 
         return FindMatchingKeyword(collapsed);
+    }
+
+    // Cross-message chat history for the windowed pass: recent chat lines per
+    // sender, pruned by age/size on insert and cleared on logout, so it stays small.
+    struct TimedMessage
+    {
+        time_t time;
+        std::string text;
+    };
+    std::unordered_map<ObjectGuid, std::deque<TimedMessage>> _recentChatMessages;
+
+    void ClearChatWindow(ObjectGuid guid)
+    {
+        _recentChatMessages.erase(guid);
+    }
+
+    // Layer 3: reconstructs an ad split over several messages. Appends the new
+    // line to the sender's window, prunes by age and size, then matches the
+    // joined text with the strict and aggressive passes. Gated by the aggressive
+    // level cap (only low-level senders are joined) to limit false positives.
+    // Returns the matched keyword, or empty.
+    std::string FindWindowedMatch(Player* player, std::string const& msg)
+    {
+        if (_chatWindowSize < 2 || _chatWindowSeconds == 0)
+            return {};
+
+        if (_aggressiveMaxLevel == 0 || player->GetLevel() > _aggressiveMaxLevel)
+            return {};
+
+        time_t const now = GameTime::GetGameTime().count();
+        std::deque<TimedMessage>& history = _recentChatMessages[player->GetGUID()];
+
+        while (!history.empty() && now - history.front().time > static_cast<time_t>(_chatWindowSeconds))
+            history.pop_front();
+
+        history.push_back({ now, msg });
+        while (history.size() > _chatWindowSize)
+            history.pop_front();
+
+        // A single line was already checked by the strict and aggressive passes.
+        if (history.size() < 2)
+            return {};
+
+        std::string joined;
+        for (TimedMessage const& entry : history)
+        {
+            if (!joined.empty())
+                joined.push_back(' ');
+            joined += entry.text;
+        }
+
+        std::string matched = FindMatchingKeyword(joined);
+        if (matched.empty())
+            matched = FindAggressiveMatch(player, joined);
+
+        return matched;
     }
 
     // Carries out the escalating punishment for a keyword match. The caller is
@@ -317,6 +386,16 @@ namespace EnhancedSupport
         return _aggressiveMaxLevel;
     }
 
+    uint32 GetChatWindowSize()
+    {
+        return _chatWindowSize;
+    }
+
+    uint32 GetChatWindowSeconds()
+    {
+        return _chatWindowSeconds;
+    }
+
     uint32 GetGoldFilterThreshold()
     {
         return _goldFilterThresholdCopper;
@@ -349,6 +428,9 @@ namespace EnhancedSupport
         _chatFilterMessage = sConfigMgr->GetOption<std::string>("EnhancedSupport.ChatFilter.Message",
             "Your message was blocked because it contains a prohibited keyword.");
         _aggressiveMaxLevel = sConfigMgr->GetOption<uint8>("EnhancedSupport.AggressiveMaxLevel", 0);
+
+        _chatWindowSize = sConfigMgr->GetOption<uint32>("EnhancedSupport.ChatFilter.WindowSize", 0);
+        _chatWindowSeconds = sConfigMgr->GetOption<uint32>("EnhancedSupport.ChatFilter.WindowSeconds", 0);
 
         // Accepts a g/s/c money string ("100g", "50g 30s") like the .send money
         // command; a bare number is copper. 0 (or unparseable) disables the check.
@@ -549,7 +631,8 @@ class EnhancedSupportChatFilter : public PlayerScript
 public:
     EnhancedSupportChatFilter() : PlayerScript("EnhancedSupportChatFilter", {
         PLAYERHOOK_ON_BEFORE_SEND_CHAT_MESSAGE,
-        PLAYERHOOK_CAN_PLAYER_USE_GROUP_CHAT
+        PLAYERHOOK_CAN_PLAYER_USE_GROUP_CHAT,
+        PLAYERHOOK_ON_LOGOUT
     }) { }
 
     void OnPlayerBeforeSendChatMessage(Player* player, uint32& type, uint32& /*lang*/, std::string& msg) override
@@ -572,6 +655,11 @@ public:
         return !FilterMessage(player, type, msg);
     }
 
+    void OnPlayerLogout(Player* player) override
+    {
+        ClearChatWindow(player->GetGUID());
+    }
+
 private:
     static bool FilterEnabled()
     {
@@ -585,24 +673,37 @@ private:
     {
         // Layer 1: strict contiguous match, applies to every sender.
         std::string matched = FindMatchingKeyword(msg);
-        bool aggressive = false;
+        char const* layer = "strict";
 
         // Layer 2: aggressive collapsed match for low-level senders (see helper).
         if (matched.empty())
         {
             matched = FindAggressiveMatch(player, msg);
             if (!matched.empty())
-                aggressive = true;
+                layer = "aggressive";
+        }
+
+        // Layer 3: windowed match across the sender's recent lines (see helper),
+        // for ads split over several messages.
+        if (matched.empty())
+        {
+            matched = FindWindowedMatch(player, msg);
+            if (!matched.empty())
+                layer = "windowed";
         }
 
         if (matched.empty())
             return false;
 
+        // A match means the buffered lines have been acted on; drop the history
+        // so the same window doesn't re-fire on the sender's next message.
+        ClearChatWindow(player->GetGUID());
+
         LOG_INFO("module.enhancedsupport",
             "ChatFilter: blocked {} from {} ({}, level {}) - matched keyword '{}', layer {}, action {} | message: \"{}\"",
             ChatTypeName(type), player->GetName(), player->GetGUID().GetCounter(),
             static_cast<uint32>(player->GetLevel()), matched,
-            aggressive ? "aggressive" : "strict", static_cast<uint32>(_chatFilterAction), msg);
+            layer, static_cast<uint32>(_chatFilterAction), msg);
 
 #ifdef HAS_CHAT_TRANSMITTER
         {
@@ -611,7 +712,7 @@ private:
                 "👤 From: **{}** (GUID {}, level {}) | Account {} | IP {}\n"
                 "💬 Channel: {}\n"
                 "📝 Message: {}",
-                matched, aggressive ? "aggressive" : "strict", EnhancedSupport::GetChatFilterActionName(),
+                matched, layer, EnhancedSupport::GetChatFilterActionName(),
                 player->GetName(), player->GetGUID().GetCounter(), static_cast<uint32>(player->GetLevel()),
                 player->GetSession()->GetAccountId(), player->GetSession()->GetRemoteAddress(),
                 ChatTypeName(type), msg);

@@ -47,6 +47,12 @@ namespace EnhancedSupport
     uint8 GetChatFilterAction();
     std::string_view GetChatFilterActionName();
     uint8 GetAggressiveMaxLevel();
+
+    // Cross-message chat window: max lines kept per sender, and how long (seconds)
+    // a line stays in the window. Both 0 when the windowed pass is disabled.
+    uint32 GetChatWindowSize();
+    uint32 GetChatWindowSeconds();
+
     std::string const& GetBanAuthor();
 
     // Money threshold (in copper) at/above which mail is logged; 0 disables the check.

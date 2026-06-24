@@ -79,6 +79,27 @@ from a new player fails the web-marker gate; the spam line passes both. Matches
 reuse each filter's own action (`MailFilter.Action` / `ChatFilter.Action`). Set
 `AggressiveMaxLevel` to `0` to disable it.
 
+### Cross-message chat window
+
+Both passes above look at a single message, so spammers split an advertisement
+across several lines, padding it with unrelated chatter so that no single line is
+actionable on its own. No one line carries a complete URL, so neither the strict
+nor the aggressive pass fires.
+
+The windowed pass keeps a short, time-bounded history of each sender's recent
+chat lines and re-runs the strict and aggressive matches over the joined text,
+reassembling the fragments so the match fires.
+
+It is controlled by `EnhancedSupport.ChatFilter.WindowSize` (max lines kept per
+sender) and `EnhancedSupport.ChatFilter.WindowSeconds` (how long a line stays in
+the window). It only runs when `WindowSize` is at least `2`, `WindowSeconds` is
+set, and the sender is at or below `EnhancedSupport.AggressiveMaxLevel`, so it
+inherits the same low-level + web-marker safeguards. Because the core hook for
+`SAY`/`YELL`/`EMOTE` cannot recall lines already broadcast, only the final
+fragment is blanked; the earlier lines have gone out, but the URL never completes
+and the full joined text is logged and the configured action applied. The history
+is pruned by age and size on each message and cleared on logout.
+
 ### Underlevel loot logger
 
 Logs when a character loots an item whose required level exceeds their own by at

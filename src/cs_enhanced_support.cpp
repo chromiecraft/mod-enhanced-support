@@ -79,6 +79,14 @@ public:
             handler->PSendSysMessage("  Aggressive pass: enabled for level <= {}",
                 static_cast<uint32>(aggressiveMaxLevel));
 
+        uint32 const windowSize = EnhancedSupport::GetChatWindowSize();
+        uint32 const windowSeconds = EnhancedSupport::GetChatWindowSeconds();
+        if (windowSize < 2 || windowSeconds == 0 || aggressiveMaxLevel == 0)
+            handler->PSendSysMessage("  Chat window pass: disabled");
+        else
+            handler->PSendSysMessage("  Chat window pass: last {} line(s) within {}s (level <= {})",
+                windowSize, windowSeconds, static_cast<uint32>(aggressiveMaxLevel));
+
         handler->PSendSysMessage("  Keywords loaded: {}", EnhancedSupport::GetKeywords().size());
 
         uint32 const goldThreshold = EnhancedSupport::GetGoldFilterThreshold();

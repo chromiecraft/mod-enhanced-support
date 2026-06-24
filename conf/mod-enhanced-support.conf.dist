@@ -95,6 +95,35 @@ EnhancedSupport.ChatFilter.Message = "Your message was blocked because it contai
 EnhancedSupport.AggressiveMaxLevel = 0
 
 #
+#    EnhancedSupport.ChatFilter.WindowSize
+#        Description: Catches advertising split across several chat lines, where each
+#                     line is harmless on its own but together they form an ad (a URL
+#                     broken up and padded with unrelated chatter). Keeps the
+#                     last few SAY/YELL/EMOTE lines per sender and matches the joined
+#                     text (with both the strict and the aggressive/collapsed passes).
+#                     This is the maximum number of lines kept per sender. The pass only
+#                     runs when it is at least 2, WindowSeconds is set, and the sender is
+#                     at or below EnhancedSupport.AggressiveMaxLevel (so it inherits the
+#                     same low-level + web-marker safeguards and reuses ChatFilter.Action).
+#        Default:     0 - Disabled (no cross-message matching)
+#                     e.g. 5 - Join up to the sender's last 5 lines
+#
+
+EnhancedSupport.ChatFilter.WindowSize = 0
+
+#
+#    EnhancedSupport.ChatFilter.WindowSeconds
+#        Description: How long (in seconds) a chat line stays in the window above. Lines
+#                     older than this are dropped before matching, so only lines sent
+#                     close together are joined. Has no effect unless
+#                     EnhancedSupport.ChatFilter.WindowSize is at least 2.
+#        Default:     0 - Disabled
+#                     e.g. 30 - Join lines sent within 30 seconds of each other
+#
+
+EnhancedSupport.ChatFilter.WindowSeconds = 0
+
+#
 #    EnhancedSupport.GoldFilter.Threshold
 #        Description: Log (and relay to Discord, if mod-chat-transmitter is available) any
 #                     player-to-player mail carrying at least this much money. Intended to
