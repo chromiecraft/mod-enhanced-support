@@ -656,14 +656,15 @@ private:
 
 // Filters player chat against the same keyword list as the mail filter. SAY/YELL/
 // EMOTE arrive via OnPlayerBeforeSendChatMessage, which can't abort the broadcast,
-// so a matched message is blanked. Party chat arrives via OnPlayerCanUseChat, a
-// boolean hook that aborts the broadcast outright when we return false.
+// so a matched message is blanked. Party and whisper chat arrive via the boolean
+// OnPlayerCanUseChat overloads, which abort the broadcast outright when we return false.
 class EnhancedSupportChatFilter : public PlayerScript
 {
 public:
     EnhancedSupportChatFilter() : PlayerScript("EnhancedSupportChatFilter", {
         PLAYERHOOK_ON_BEFORE_SEND_CHAT_MESSAGE,
         PLAYERHOOK_CAN_PLAYER_USE_GROUP_CHAT,
+        PLAYERHOOK_CAN_PLAYER_USE_PRIVATE_CHAT,
         PLAYERHOOK_ON_LOGOUT
     }) { }
 
@@ -681,6 +682,15 @@ public:
     bool OnPlayerCanUseChat(Player* player, uint32 type, uint32 /*lang*/, std::string& msg, Group* /*group*/) override
     {
         if (!FilterEnabled() || (type != CHAT_MSG_PARTY && type != CHAT_MSG_PARTY_LEADER))
+            return true;
+
+        // Returning false aborts the broadcast, so no need to blank the text.
+        return !FilterMessage(player, type, msg);
+    }
+
+    bool OnPlayerCanUseChat(Player* player, uint32 type, uint32 /*lang*/, std::string& msg, Player* /*receiver*/) override
+    {
+        if (!FilterEnabled() || type != CHAT_MSG_WHISPER)
             return true;
 
         // Returning false aborts the broadcast, so no need to blank the text.
@@ -765,6 +775,7 @@ private:
             case CHAT_MSG_SAY:          return "say";
             case CHAT_MSG_YELL:         return "yell";
             case CHAT_MSG_EMOTE:        return "emote";
+            case CHAT_MSG_WHISPER:      return "whisper";
             case CHAT_MSG_PARTY:        return "party";
             case CHAT_MSG_PARTY_LEADER: return "party leader";
             default:                    return "chat";

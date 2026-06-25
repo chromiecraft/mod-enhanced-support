@@ -56,8 +56,8 @@ EnhancedSupport.MailFilter.BanAuthor = "SupportModule"
 
 #
 #    EnhancedSupport.ChatFilter.Action
-#        Description: What to do when a player's SAY, YELL, EMOTE or PARTY message contains a
-#                     configured keyword. Uses the same keyword list as the mail filter
+#        Description: What to do when a player's SAY, YELL, EMOTE, PARTY or WHISPER message
+#                     contains a configured keyword. Uses the same keyword list as the mail filter
 #                     and the same ban author. Also gated by EnhancedSupport.Enable. The
 #                     matched message is always suppressed for any value above 0; the
 #                     action escalates from there.
