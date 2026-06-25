@@ -81,7 +81,8 @@ EnhancedSupport.ChatFilter.Message = "Your message was blocked because it contai
 
 #
 #    EnhancedSupport.AggressiveMaxLevel
-#        Description: Catches space-evaded spam (e.g. "B U Y G O L D . C O M") in both mail
+#        Description: Catches spam that evades the plain filter by spacing letters out or
+#                     swapping in look-alike characters (digits for letters), in both mail
 #                     and chat, but only from low-level senders (gold-seller bots are
 #                     throwaway low-level characters) whose text also contains a web marker
 #                     (.com, www, http, "dot com", ...). Both conditions are required, which

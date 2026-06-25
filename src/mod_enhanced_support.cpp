@@ -121,6 +121,37 @@ namespace
         return out;
     }
 
+    // Folds common leetspeak/look-alike substitutions back to letters so that
+    // digit-evaded spam (".c0m", "g0ld", "dotn3t") reads as its plain form. Input
+    // is expected lowercased. Used only by the level-gated aggressive pass, where
+    // the extra false-positive risk of digit folding is bounded; the strict pass
+    // keeps matching the text verbatim.
+    std::string FoldConfusables(std::string const& input)
+    {
+        std::string out;
+        out.reserve(input.size());
+        for (char c : input)
+        {
+            switch (c)
+            {
+                case '0': out.push_back('o'); break;
+                case '1': out.push_back('i'); break;
+                case '3': out.push_back('e'); break;
+                case '4': out.push_back('a'); break;
+                case '5': out.push_back('s'); break;
+                case '7': out.push_back('t'); break;
+                case '8': out.push_back('b'); break;
+                case '9': out.push_back('g'); break;
+                case '$': out.push_back('s'); break;
+                case '@': out.push_back('a'); break;
+                case '|': out.push_back('i'); break;
+                default:  out.push_back(c);   break;
+            }
+        }
+
+        return out;
+    }
+
     // Returns the first keyword contained in the text (case-insensitive), or
     // empty if the text is clean.
     std::string FindMatchingKeyword(std::string const& text)
@@ -154,9 +185,9 @@ namespace
     // isn't enough.
     bool HasUrlMarker(std::string const& collapsed)
     {
-        static constexpr std::array<std::string_view, 9> markers =
+        static constexpr std::array<std::string_view, 10> markers =
         {
-            "http", "www", "wvvw", ".com", ".net", ".org", "dotcom", "dotnet", "dotorg"
+            "http", "www", "wvvw", "web", ".com", ".net", ".org", "dotcom", "dotnet", "dotorg"
         };
 
         for (std::string_view marker : markers)
@@ -168,16 +199,16 @@ namespace
         return false;
     }
 
-    // Aggressive pass shared by the mail and chat filters: catches space-evaded
-    // keywords, but only for a low-level sender whose text also carries a URL
-    // marker. Both signals are required to keep despaced normal phrases from
-    // matching. Returns the matched keyword, or empty.
+    // Aggressive pass shared by the mail and chat filters: catches keywords evaded
+    // by spacing and by look-alike character substitutions, but only for a low-level
+    // sender whose text also carries a URL marker. Both signals are required to keep
+    // despaced normal phrases from matching. Returns the matched keyword, or empty.
     std::string FindAggressiveMatch(Player* player, std::string const& text)
     {
         if (_aggressiveMaxLevel == 0 || player->GetLevel() > _aggressiveMaxLevel)
             return {};
 
-        std::string const collapsed = StripWhitespace(ToLowerAscii(text));
+        std::string const collapsed = FoldConfusables(StripWhitespace(ToLowerAscii(text)));
         if (!HasUrlMarker(collapsed))
             return {};
 

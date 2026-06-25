@@ -67,8 +67,9 @@ token that can contain a blocked keyword as a substring, false-positiving
 legitimate chat.
 
 The aggressive pass (`EnhancedSupport.AggressiveMaxLevel`) runs the
-whitespace-collapsed match for both mail and chat, but only when **both** of
-these hold:
+whitespace-collapsed match for both mail and chat, additionally folding common
+look-alike character substitutions back to letters so digit-disguised text reads
+as its plain form. It runs only when **both** of these hold:
 
 - the sender is at or below the configured level (gold bots are throwaway
   low-level characters; real raiders advertising `LFG tank for Onyxia` are not), and
