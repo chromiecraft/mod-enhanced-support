@@ -119,6 +119,12 @@ public:
                 handler->SendSysMessage("  Loot filter max level: no cap (all levels)");
             else
                 handler->PSendSysMessage("  Loot filter max level: {}", static_cast<uint32>(lootMaxLevel));
+
+            uint32 const lootBatch = EnhancedSupport::GetLootBatchSeconds();
+            if (lootBatch == 0)
+                handler->SendSysMessage("  Loot notification batching: off (one per item)");
+            else
+                handler->PSendSysMessage("  Loot notification batching: {}s window", lootBatch);
         }
 
         handler->PSendSysMessage("  Ban author: {}", EnhancedSupport::GetBanAuthor());

@@ -120,6 +120,12 @@ namespace
     // (applies to every level). Lets the check target only low-level characters.
     uint8 _lootFilterMaxLevel = 0;
 
+    // Coalesce a looter's flagged loot into one Discord notification, flushed once
+    // no further item has arrived for this many seconds (so a multi-item container
+    // sends a single message). 0 sends one notification per item. Discord-only; the
+    // server log keeps one line per item regardless.
+    uint32 _lootBatchSeconds = 0;
+
     bool _startupNoticeEnabled = false;
     std::string _startupNoticeMessage;
     uint32 _startupNoticeDelaySeconds = 5;
@@ -306,6 +312,127 @@ namespace
         history.push_back(now);
         return static_cast<uint32>(history.size());
     }
+
+#ifdef HAS_CHAT_TRANSMITTER
+    // Buffered underlevel-loot items for one looter, coalesced into a single
+    // Discord notification. Holds only captured values (no live Player*), since
+    // it is flushed up to _lootBatchSeconds after the loot happened.
+    struct LootBatchItem
+    {
+        std::string name;
+        uint32 itemId;
+        uint32 count;
+        uint32 requiredLevel;
+        uint32 gap;
+    };
+
+    struct LootBatch
+    {
+        ObjectGuid sourceGuid;   // loot source; a change flushes the prior batch
+        std::string header;      // looter line (name/account/IP/group)
+        std::string sourceLine;  // source + location (+ teleport)
+        uint32 playerLevel = 0;
+        std::vector<LootBatchItem> items;
+        time_t lastUpdate = 0;
+    };
+
+    std::unordered_map<ObjectGuid /*looter*/, LootBatch> _lootBatches;
+
+    void EmitLootBatch(LootBatch const& batch)
+    {
+        if (batch.items.empty())
+            return;
+
+        bool const multi = batch.items.size() > 1;
+
+        std::string itemsBlock;
+        for (LootBatchItem const& it : batch.items)
+        {
+            if (!itemsBlock.empty())
+                itemsBlock.push_back('\n');
+
+            itemsBlock += Acore::StringFormat(
+                "🎁 [{}](https://wowgaming.altervista.org/aowow/?item={}) (id {}) x{}",
+                it.name, it.itemId, it.itemId, it.count);
+
+            // For a single item the levels live in the headline; per-item gaps
+            // only make sense when several items share one notification.
+            if (multi)
+                itemsBlock += Acore::StringFormat(" — requires {} (gap {})", it.requiredLevel, it.gap);
+        }
+
+        std::string headline;
+        if (multi)
+            headline = Acore::StringFormat(
+                "📦 **Underlevel loot** — looter level {}, {} items",
+                batch.playerLevel, batch.items.size());
+        else
+            headline = Acore::StringFormat(
+                "📦 **Underlevel loot** — requires level {}, looter level {} (gap {})",
+                batch.items.front().requiredLevel, batch.playerLevel, batch.items.front().gap);
+
+        std::string note = Acore::StringFormat(
+            "{}\n{}\n📍 Source: {}\n{}",
+            headline, batch.header, batch.sourceLine, itemsBlock);
+        sChatTransmitter->QueueNotification("ItemLoot", note);
+    }
+
+    // Adds one flagged item to the looter's batch (or emits immediately when
+    // batching is off). A change of loot source flushes the previous batch first.
+    void QueueOrBatchLoot(ObjectGuid looter, ObjectGuid sourceGuid, std::string header,
+        std::string sourceLine, uint32 playerLevel, LootBatchItem item)
+    {
+        if (_lootBatchSeconds == 0)
+        {
+            LootBatch single;
+            single.header = std::move(header);
+            single.sourceLine = std::move(sourceLine);
+            single.playerLevel = playerLevel;
+            single.items.push_back(std::move(item));
+            EmitLootBatch(single);
+            return;
+        }
+
+        LootBatch& batch = _lootBatches[looter];
+        if (!batch.items.empty() && batch.sourceGuid != sourceGuid)
+        {
+            EmitLootBatch(batch);
+            batch = LootBatch{};
+        }
+
+        batch.sourceGuid = sourceGuid;
+        batch.header = std::move(header);
+        batch.sourceLine = std::move(sourceLine);
+        batch.playerLevel = playerLevel;
+        batch.items.push_back(std::move(item));
+        batch.lastUpdate = GameTime::GetGameTime().count();
+    }
+
+    void FlushLooterLoot(ObjectGuid looter)
+    {
+        auto it = _lootBatches.find(looter);
+        if (it == _lootBatches.end())
+            return;
+
+        EmitLootBatch(it->second);
+        _lootBatches.erase(it);
+    }
+
+    // Emits and drops batches that have gone _lootBatchSeconds without a new item.
+    void FlushDueLootBatches(time_t now)
+    {
+        for (auto it = _lootBatches.begin(); it != _lootBatches.end(); )
+        {
+            if (now - it->second.lastUpdate >= static_cast<time_t>(_lootBatchSeconds))
+            {
+                EmitLootBatch(it->second);
+                it = _lootBatches.erase(it);
+            }
+            else
+                ++it;
+        }
+    }
+#endif
 
     // Carries out the escalating punishment for a keyword match. The caller is
     // responsible for suppressing the offending content itself.
@@ -504,6 +631,11 @@ namespace EnhancedSupport
         return _lootFilterMaxLevel;
     }
 
+    uint32 GetLootBatchSeconds()
+    {
+        return _lootBatchSeconds;
+    }
+
     std::string FormatMoney(uint32 copper)
     {
         return Acore::StringFormat("{}g {}s {}c", copper / GOLD, (copper % GOLD) / SILVER, copper % SILVER);
@@ -549,6 +681,7 @@ namespace EnhancedSupport
 
         _lootFilterLevelGap = sConfigMgr->GetOption<uint32>("EnhancedSupport.LootFilter.LevelGap", 0);
         _lootFilterMaxLevel = sConfigMgr->GetOption<uint8>("EnhancedSupport.LootFilter.MaxLevel", 0);
+        _lootBatchSeconds = sConfigMgr->GetOption<uint32>("EnhancedSupport.LootFilter.BatchSeconds", 0);
 
         _startupNoticeEnabled = sConfigMgr->GetOption<bool>("EnhancedSupport.StartupNotice.Enable", false);
         _startupNoticeMessage = sConfigMgr->GetOption<std::string>("EnhancedSupport.StartupNotice.Message", "Server restarted!");
@@ -593,6 +726,11 @@ public:
     void OnUpdate(uint32 diff) override
     {
         _scheduler.Update(diff);
+
+#ifdef HAS_CHAT_TRANSMITTER
+        if (!_lootBatches.empty())
+            FlushDueLootBatches(GameTime::GetGameTime().count());
+#endif
     }
 
 private:
@@ -858,7 +996,8 @@ class EnhancedSupportLootFilter : public PlayerScript
 {
 public:
     EnhancedSupportLootFilter() : PlayerScript("EnhancedSupportLootFilter", {
-        PLAYERHOOK_ON_LOOT_ITEM
+        PLAYERHOOK_ON_LOOT_ITEM,
+        PLAYERHOOK_ON_LOGOUT
     }) { }
 
     void OnPlayerLootItem(Player* player, Item* item, uint32 count, ObjectGuid lootguid) override
@@ -902,26 +1041,30 @@ public:
 #ifdef HAS_CHAT_TRANSMITTER
         std::string sourceLine = Acore::StringFormat("{} | 🗺️ {}", FormatDiscordSource(src), location);
 
-        // No entry means no aowow link (despawned source, container, corpse,
-        // player); give the GM a ready-to-paste teleport to the looter instead.
-        if (!src.entry)
+        // No world spawn to go to (container in bags, corpse, player, despawned
+        // source); give the GM a ready-to-paste teleport to the looter instead.
+        if (!src.spawnId)
             sourceLine += Acore::StringFormat(
                 "\n🧭 Looter at: `.go xyz {:.3f} {:.3f} {:.3f} {} {:.3f}`",
                 player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
                 player->GetMapId(), player->GetOrientation());
 
-        std::string note = Acore::StringFormat(
-            "📦 **Underlevel loot** — requires level {}, looter level {} (gap {})\n"
-            "👤 **{}** (GUID {}) | Account {} | IP {} | {}\n"
-            "🎁 Item: [{}](https://wowgaming.altervista.org/aowow/?item={}) (id {}) x{}\n"
-            "📍 Source: {}",
-            proto->RequiredLevel, playerLevel, gap,
+        std::string header = Acore::StringFormat(
+            "👤 **{}** (GUID {}) | Account {} | IP {} | {}",
             player->GetName(), player->GetGUID().GetCounter(),
             player->GetSession()->GetAccountId(), player->GetSession()->GetRemoteAddress(),
-            inGroup ? "👥 in group" : "🧍 solo",
-            proto->Name1, proto->ItemId, proto->ItemId, count,
-            sourceLine);
-        sChatTransmitter->QueueNotification("ItemLoot", note);
+            inGroup ? "👥 in group" : "🧍 solo");
+
+        QueueOrBatchLoot(player->GetGUID(), lootguid, std::move(header), std::move(sourceLine),
+            playerLevel, LootBatchItem{ proto->Name1, proto->ItemId, count, proto->RequiredLevel, gap });
+#endif
+    }
+
+    void OnPlayerLogout(Player* player) override
+    {
+#ifdef HAS_CHAT_TRANSMITTER
+        // Send any pending batch before the looter's data goes stale.
+        FlushLooterLoot(player->GetGUID());
 #endif
     }
 
@@ -929,11 +1072,12 @@ private:
     struct LootSource
     {
         char const* label = "unknown source";
-        std::string name;                // creature/object name; empty if unresolved
-        uint32 entry = 0;                // template entry, for the aowow link; 0 if unresolved
-        ObjectGuid::LowType spawnId = 0; // DB spawn id; 0 for temporary objects (e.g. fishing bobbers)
+        std::string name;                // creature/object/container name; empty if unresolved
+        uint32 entry = 0;                // template entry (item id for a container); 0 if unresolved
+        ObjectGuid::LowType spawnId = 0; // DB spawn id; 0 for items and temporary objects
         bool isCreature = false;
         bool isGameObject = false;
+        bool isItem = false;             // a container item in the looter's bags
         bool isFishing = false;
     };
 
@@ -970,7 +1114,17 @@ private:
             }
         }
         else if (lootguid.IsItem())
+        {
+            src.isItem = true;
             src.label = "container";
+            // A container is an item in the looter's own bags, not a world object.
+            if (Item* container = player->GetItemByGuid(lootguid))
+            {
+                src.entry = container->GetEntry();
+                if (ItemTemplate const* containerProto = container->GetTemplate())
+                    src.name = containerProto->Name1;
+            }
+        }
         else if (lootguid.IsCorpse())
             src.label = "corpse";
         else if (lootguid.IsPlayer())
@@ -998,8 +1152,8 @@ private:
     }
 
 #ifdef HAS_CHAT_TRANSMITTER
-    // Discord "Source" line, linking creatures/objects to their aowow page by
-    // template entry. Other sources (containers, corpses) carry no link.
+    // Discord "Source" line, linking creatures/objects/containers to their aowow
+    // page by template entry. Other sources (corpses, players) carry no link.
     static std::string FormatDiscordSource(LootSource const& src)
     {
         if (src.isCreature && src.entry)
@@ -1011,6 +1165,11 @@ private:
             return Acore::StringFormat(
                 "{} [{} #{}](https://wowgaming.altervista.org/aowow/?object={}) (spawn {})",
                 src.label, src.name, src.entry, src.entry, src.spawnId);
+
+        if (src.isItem && src.entry)
+            return Acore::StringFormat(
+                "{} [{} #{}](https://wowgaming.altervista.org/aowow/?item={})",
+                src.label, src.name, src.entry, src.entry);
 
         return std::string(src.label);
     }

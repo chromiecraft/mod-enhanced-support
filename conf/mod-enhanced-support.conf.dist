@@ -216,6 +216,20 @@ EnhancedSupport.LootFilter.LevelGap = 0
 EnhancedSupport.LootFilter.MaxLevel = 0
 
 #
+#    EnhancedSupport.LootFilter.BatchSeconds
+#        Description: When a looter pulls several flagged items from one container or creature,
+#                     coalesce them into a single Discord notification instead of one per item.
+#                     The batch is sent once no further item has arrived from that source for
+#                     this many seconds (or when the looter loots a different source, or logs
+#                     out). Affects the Discord notification only - the server log keeps one
+#                     line per item. Requires mod-chat-transmitter.
+#        Default:     0 - No batching (one notification per item)
+#                     e.g. 3 - Group items looted within 3 seconds of each other
+#
+
+EnhancedSupport.LootFilter.BatchSeconds = 0
+
+#
 #    EnhancedSupport.StartupNotice.Enable
 #        Description: Post a Discord notice when the world server has started, showing the
 #                     git revision the server is running. Requires mod-chat-transmitter to

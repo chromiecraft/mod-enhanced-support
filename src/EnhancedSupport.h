@@ -73,6 +73,10 @@ namespace EnhancedSupport
     // Highest looter level the loot check applies to; 0 means no cap (all levels).
     uint8 GetLootFilterMaxLevel();
 
+    // Seconds of inactivity before a looter's batched Discord loot notification is
+    // sent; 0 sends one notification per item (no batching).
+    uint32 GetLootBatchSeconds();
+
     // Formats a copper amount as a "Xg Ys Zc" string.
     std::string FormatMoney(uint32 copper);
 

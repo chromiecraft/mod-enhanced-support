@@ -137,6 +137,12 @@ the item and the source creature/object are linked to their aowow database pages
 below a given level (e.g. `10` to watch only characters up to level 10); `0`
 applies it to every level.
 
+When a looter pulls several flagged items from one container or creature, each is
+its own Discord notification by default. Set `EnhancedSupport.LootFilter.BatchSeconds`
+to coalesce them into a single message, sent once no further item has arrived from
+that source for that many seconds (or when the looter switches source or logs out).
+This affects the Discord notification only; the server log keeps one line per item.
+
 ### Startup Discord notice
 
 When enabled, posts a decorated Discord message once the world server has
