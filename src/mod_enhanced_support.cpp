@@ -874,9 +874,9 @@ public:
         PLAYERHOOK_ON_LOGOUT
     }) { }
 
-    void OnPlayerBeforeSendChatMessage(Player* player, uint32& type, uint32& /*lang*/, std::string& msg) override
+    void OnPlayerBeforeSendChatMessage(Player* player, uint32& type, uint32& lang, std::string& msg) override
     {
-        if (!FilterEnabled() || (type != CHAT_MSG_SAY && type != CHAT_MSG_YELL && type != CHAT_MSG_EMOTE))
+        if (!FilterEnabled() || lang == LANG_ADDON || (type != CHAT_MSG_SAY && type != CHAT_MSG_YELL && type != CHAT_MSG_EMOTE))
             return;
 
         // This hook runs before the message is broadcast but can't stop it, so
@@ -885,18 +885,18 @@ public:
             msg.clear();
     }
 
-    bool OnPlayerCanUseChat(Player* player, uint32 type, uint32 /*lang*/, std::string& msg, Group* /*group*/) override
+    bool OnPlayerCanUseChat(Player* player, uint32 type, uint32 lang, std::string& msg, Group* /*group*/) override
     {
-        if (!FilterEnabled() || (type != CHAT_MSG_PARTY && type != CHAT_MSG_PARTY_LEADER))
+        if (!FilterEnabled() || lang == LANG_ADDON || (type != CHAT_MSG_PARTY && type != CHAT_MSG_PARTY_LEADER))
             return true;
 
         // Returning false aborts the broadcast, so no need to blank the text.
         return !FilterMessage(player, type, msg);
     }
 
-    bool OnPlayerCanUseChat(Player* player, uint32 type, uint32 /*lang*/, std::string& msg, Player* /*receiver*/) override
+    bool OnPlayerCanUseChat(Player* player, uint32 type, uint32 lang, std::string& msg, Player* /*receiver*/) override
     {
-        if (!FilterEnabled() || type != CHAT_MSG_WHISPER)
+        if (!FilterEnabled() || lang == LANG_ADDON || type != CHAT_MSG_WHISPER)
             return true;
 
         // Returning false aborts the broadcast, so no need to blank the text.
