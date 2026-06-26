@@ -1075,7 +1075,7 @@ public:
                 player->GetName(), player->GetGUID().GetCounter(), static_cast<uint32>(player->GetLevel()),
                 player->GetSession()->GetAccountId(), player->GetSession()->GetRemoteAddress(),
                 membername);
-            sChatTransmitter->QueueNotification("InviteFilter", note);
+            sChatTransmitter->QueueNotification("ChatFilter", note);
         }
 #endif
 
