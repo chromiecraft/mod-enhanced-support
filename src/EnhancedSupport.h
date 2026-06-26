@@ -53,6 +53,14 @@ namespace EnhancedSupport
     uint32 GetChatWindowSize();
     uint32 GetChatWindowSeconds();
 
+    // Party-invite spam filter: action scale, the level cap it watches (0 = all
+    // levels), and the rate threshold (more than Count invites within Seconds).
+    uint8 GetInviteFilterAction();
+    std::string_view GetInviteFilterActionName();
+    uint8 GetInviteMaxLevel();
+    uint32 GetInviteRateCount();
+    uint32 GetInviteRateSeconds();
+
     std::string const& GetBanAuthor();
 
     // Money threshold (in copper) at/above which mail is logged; 0 disables the check.

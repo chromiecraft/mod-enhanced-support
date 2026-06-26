@@ -102,6 +102,23 @@ fragment is blanked; the earlier lines have gone out, but the URL never complete
 and the full joined text is logged and the configured action applied. The history
 is pruned by age and size on each message and cleared on logout.
 
+### Party-invite spam filter
+
+Spammers also create throwaway low-level characters and mass-invite strangers to a
+group. A party invite carries no text to match, so this filter acts on the rate
+instead: it blocks a sender's invite once more than `RateCount` invites from them
+fall within the last `RateSeconds`. The core drops a blocked invite silently, so
+the spammer sees no error and the target gets no popup. The same escalating actions
+are available through a dedicated `EnhancedSupport.InviteFilter.Action` (separate
+from the chat and mail filters).
+
+To keep legitimate grouping clear, invites to a guildmate, to a player who has the
+inviter on their friends list, or to a player on the same IP (same household or
+multiboxer) are never counted. `InviteFilter.MaxLevel`
+restricts the filter to low-level inviters (`0` watches every level). The filter
+runs only when `InviteFilter.Action`, `RateCount` and `RateSeconds` are all set.
+Per-sender invite history is pruned on each invite and cleared on logout.
+
 ### Underlevel loot logger
 
 Logs when a character loots an item whose required level exceeds their own by at

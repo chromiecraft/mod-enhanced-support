@@ -89,6 +89,20 @@ public:
 
         handler->PSendSysMessage("  Keywords loaded: {}", EnhancedSupport::GetKeywords().size());
 
+        uint8 const inviteAction = EnhancedSupport::GetInviteFilterAction();
+        uint32 const inviteCount = EnhancedSupport::GetInviteRateCount();
+        uint32 const inviteSeconds = EnhancedSupport::GetInviteRateSeconds();
+        if (inviteAction == 0 || inviteCount == 0 || inviteSeconds == 0)
+            handler->SendSysMessage("  Invite filter: disabled");
+        else
+        {
+            uint8 const inviteMaxLevel = EnhancedSupport::GetInviteMaxLevel();
+            handler->PSendSysMessage("  Invite filter: > {} invites in {}s, action {} ({}), level {}",
+                inviteCount, inviteSeconds, static_cast<uint32>(inviteAction),
+                EnhancedSupport::GetInviteFilterActionName(),
+                inviteMaxLevel == 0 ? "any" : Acore::StringFormat("<= {}", static_cast<uint32>(inviteMaxLevel)));
+        }
+
         uint32 const goldThreshold = EnhancedSupport::GetGoldFilterThreshold();
         handler->PSendSysMessage("  Gold filter threshold: {}",
             goldThreshold == 0 ? "disabled" : EnhancedSupport::FormatMoney(goldThreshold));

@@ -125,6 +125,59 @@ EnhancedSupport.ChatFilter.WindowSize = 0
 EnhancedSupport.ChatFilter.WindowSeconds = 0
 
 #
+#    EnhancedSupport.InviteFilter.Action
+#        Description: What to do when a player fires too many party invites in a short window
+#                     (see RateCount / RateSeconds below) - the pattern of throwaway low-level
+#                     characters mass-inviting strangers to spam. The offending invite is
+#                     always dropped silently for any value above 0 (the spammer sees no error,
+#                     the target gets no popup); the action escalates from there. Has its own
+#                     action setting, separate from the chat and mail filters. Also gated by
+#                     EnhancedSupport.Enable.
+#        Default:     0 - Disabled (filter off)
+#                     1 - Block invite + notify the sender
+#                     2 - Block invite + kick the sender
+#                     3 - Block invite + permanently ban the sender's account
+#                     4 - Block invite + permanently ban the account and its IP
+#
+
+EnhancedSupport.InviteFilter.Action = 0
+
+#
+#    EnhancedSupport.InviteFilter.Message
+#        Description: System chat message shown to the sender when Action = 1 (notify).
+#                     Leave empty to send no message. Higher actions kick/ban instead.
+#        Default:     "Your party invite was blocked."
+#
+
+EnhancedSupport.InviteFilter.Message = "Your party invite was blocked."
+
+#
+#    EnhancedSupport.InviteFilter.RateCount
+#    EnhancedSupport.InviteFilter.RateSeconds
+#        Description: The rate threshold. An invite is blocked once more than RateCount invites
+#                     from the same sender fall within the last RateSeconds. Invites to a
+#                     guildmate, to a player who has the inviter on their friends list, or to a
+#                     player on the same IP (same household / multiboxer) are never counted.
+#                     Both must be > 0 for the filter to run.
+#        Default:     0 - Disabled
+#                     e.g. RateCount = 3, RateSeconds = 30 - block the 4th invite within 30s
+#
+
+EnhancedSupport.InviteFilter.RateCount = 0
+EnhancedSupport.InviteFilter.RateSeconds = 0
+
+#
+#    EnhancedSupport.InviteFilter.MaxLevel
+#        Description: Restrict the invite filter to inviters at or below this level, so it only
+#                     watches the low-level throwaway characters spammers use. Has no effect
+#                     unless InviteFilter.Action and the rate options above are set.
+#        Default:     0 - No cap (watch inviters of any level)
+#                     e.g. 5 - Watch only inviters at or below level 5
+#
+
+EnhancedSupport.InviteFilter.MaxLevel = 0
+
+#
 #    EnhancedSupport.GoldFilter.Threshold
 #        Description: Log (and relay to Discord, if mod-chat-transmitter is available) any
 #                     player-to-player mail carrying at least this much money. Intended to

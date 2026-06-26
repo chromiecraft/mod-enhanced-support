@@ -31,9 +31,11 @@
 #include "ItemTemplate.h"
 #include "Log.h"
 #include "Map.h"
+#include "ObjectAccessor.h"
 #include "ObjectGuid.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include "SocialMgr.h"
 #include "StringConvert.h"
 #include "StringFormat.h"
 #include "TaskScheduler.h"
@@ -69,6 +71,7 @@ namespace
 
     constexpr char const* MAIL_FILTER_BAN_REASON = "Mail filter: prohibited content (advertising/scam)";
     constexpr char const* CHAT_FILTER_BAN_REASON = "Chat filter: prohibited content (advertising/scam)";
+    constexpr char const* INVITE_FILTER_BAN_REASON = "Invite filter: party invite spam";
 
     bool _enabled = true;
     uint8 _mailFilterAction = MAIL_FILTER_DISABLED;
@@ -93,6 +96,16 @@ namespace
     // gated by _aggressiveMaxLevel, so only low-level senders are joined.
     uint32 _chatWindowSize = 0;
     uint32 _chatWindowSeconds = 0;
+
+    // Party-invite spam filter: blocks a sender's group invites once more than
+    // RateCount of them are fired within RateSeconds. Has its own action scale.
+    // Only inviters at or below MaxLevel are watched (0 = every level). Invites to
+    // a guildmate or to someone who has the inviter friended are never counted.
+    uint8 _inviteFilterAction = MAIL_FILTER_DISABLED;
+    std::string _inviteFilterMessage;
+    uint8 _inviteMaxLevel = 0;
+    uint32 _inviteRateCount = 0;
+    uint32 _inviteRateSeconds = 0;
 
     // Mail carrying at least this much money (in copper) is logged (and relayed
     // to Discord). 0 disables the check. Parsed from a g/s/c money string.
@@ -271,6 +284,29 @@ namespace
         return matched;
     }
 
+    // Per-inviter timestamps of recent group invites, for the rate check. Pruned
+    // on each invite and cleared on logout, so it stays small.
+    std::unordered_map<ObjectGuid, std::deque<time_t>> _recentInvites;
+
+    void ClearInviteWindow(ObjectGuid guid)
+    {
+        _recentInvites.erase(guid);
+    }
+
+    // Records an invite from `guid` now, drops entries older than the rate window,
+    // and returns how many invites remain in the window (including this one).
+    uint32 RecordInviteAndCount(ObjectGuid guid)
+    {
+        time_t const now = GameTime::GetGameTime().count();
+        std::deque<time_t>& history = _recentInvites[guid];
+
+        while (!history.empty() && now - history.front() > static_cast<time_t>(_inviteRateSeconds))
+            history.pop_front();
+
+        history.push_back(now);
+        return static_cast<uint32>(history.size());
+    }
+
     // Carries out the escalating punishment for a keyword match. The caller is
     // responsible for suppressing the offending content itself.
     void ApplyFilterAction(Player* player, uint8 action, std::string const& notifyMessage,
@@ -428,6 +464,31 @@ namespace EnhancedSupport
         return _chatWindowSeconds;
     }
 
+    uint8 GetInviteFilterAction()
+    {
+        return _inviteFilterAction;
+    }
+
+    std::string_view GetInviteFilterActionName()
+    {
+        return GetFilterActionName(_inviteFilterAction);
+    }
+
+    uint8 GetInviteMaxLevel()
+    {
+        return _inviteMaxLevel;
+    }
+
+    uint32 GetInviteRateCount()
+    {
+        return _inviteRateCount;
+    }
+
+    uint32 GetInviteRateSeconds()
+    {
+        return _inviteRateSeconds;
+    }
+
     uint32 GetGoldFilterThreshold()
     {
         return _goldFilterThresholdCopper;
@@ -463,6 +524,13 @@ namespace EnhancedSupport
 
         _chatWindowSize = sConfigMgr->GetOption<uint32>("EnhancedSupport.ChatFilter.WindowSize", 0);
         _chatWindowSeconds = sConfigMgr->GetOption<uint32>("EnhancedSupport.ChatFilter.WindowSeconds", 0);
+
+        _inviteFilterAction = sConfigMgr->GetOption<uint8>("EnhancedSupport.InviteFilter.Action", MAIL_FILTER_DISABLED);
+        _inviteFilterMessage = sConfigMgr->GetOption<std::string>("EnhancedSupport.InviteFilter.Message",
+            "Your party invite was blocked.");
+        _inviteMaxLevel = sConfigMgr->GetOption<uint8>("EnhancedSupport.InviteFilter.MaxLevel", 0);
+        _inviteRateCount = sConfigMgr->GetOption<uint32>("EnhancedSupport.InviteFilter.RateCount", 0);
+        _inviteRateSeconds = sConfigMgr->GetOption<uint32>("EnhancedSupport.InviteFilter.RateSeconds", 0);
 
         // Accepts a g/s/c money string ("100g", "50g 30s") like the .send money
         // command; a bare number is copper. 0 (or unparseable) disables the check.
@@ -949,10 +1017,85 @@ private:
 #endif
 };
 
+// Blocks a sender's group invites once they fire too many in a short window - the
+// pattern of throwaway low-level characters mass-inviting players to spam. The
+// core's invite handler drops the invite silently when this hook returns false.
+class EnhancedSupportInviteFilter : public PlayerScript
+{
+public:
+    EnhancedSupportInviteFilter() : PlayerScript("EnhancedSupportInviteFilter", {
+        PLAYERHOOK_CAN_GROUP_INVITE,
+        PLAYERHOOK_ON_LOGOUT
+    }) { }
+
+    bool OnPlayerCanGroupInvite(Player* player, std::string& membername) override
+    {
+        if (!_enabled || _inviteFilterAction == MAIL_FILTER_DISABLED || _inviteRateCount == 0 || _inviteRateSeconds == 0)
+            return true;
+
+        // Only watch low-level inviters (gold-seller bots are throwaway low-level
+        // characters); 0 means watch every level.
+        if (_inviteMaxLevel != 0 && player->GetLevel() > _inviteMaxLevel)
+            return true;
+
+        // Don't count invites to a guildmate, to someone who has the inviter
+        // friended, or to someone on the same IP (same household / multiboxer) -
+        // those are legitimate, not spam.
+        if (Player* invitee = ObjectAccessor::FindPlayerByName(membername, false))
+        {
+            uint32 const guildId = player->GetGuildId();
+            if (guildId != 0 && invitee->GetGuildId() == guildId)
+                return true;
+
+            PlayerSocial* social = invitee->GetSocial();
+            if (social && social->HasFriend(player->GetGUID()))
+                return true;
+
+            if (invitee->GetSession() && invitee->GetSession()->GetRemoteAddress() == player->GetSession()->GetRemoteAddress())
+                return true;
+        }
+
+        uint32 const count = RecordInviteAndCount(player->GetGUID());
+        if (count <= _inviteRateCount)
+            return true;
+
+        LOG_INFO("module.enhancedsupport",
+            "InviteFilter: blocked group invite from {} ({}, level {}) to {} - {} invites in {}s (limit {}), action {} | Account {} | IP {}",
+            player->GetName(), player->GetGUID().GetCounter(), static_cast<uint32>(player->GetLevel()),
+            membername, count, _inviteRateSeconds, _inviteRateCount, static_cast<uint32>(_inviteFilterAction),
+            player->GetSession()->GetAccountId(), player->GetSession()->GetRemoteAddress());
+
+#ifdef HAS_CHAT_TRANSMITTER
+        {
+            std::string note = Acore::StringFormat(
+                "🚫 **Invite spam blocked** — {} invites in {}s (limit {}), action `{}`\n"
+                "👤 From: **{}** (GUID {}, level {}) | Account {} | IP {}\n"
+                "📨 Target: {}",
+                count, _inviteRateSeconds, _inviteRateCount, EnhancedSupport::GetInviteFilterActionName(),
+                player->GetName(), player->GetGUID().GetCounter(), static_cast<uint32>(player->GetLevel()),
+                player->GetSession()->GetAccountId(), player->GetSession()->GetRemoteAddress(),
+                membername);
+            sChatTransmitter->QueueNotification("InviteFilter", note);
+        }
+#endif
+
+        ApplyFilterAction(player, _inviteFilterAction, _inviteFilterMessage,
+            "EnhancedSupport: party invite spam", INVITE_FILTER_BAN_REASON);
+
+        return false;
+    }
+
+    void OnPlayerLogout(Player* player) override
+    {
+        ClearInviteWindow(player->GetGUID());
+    }
+};
+
 void AddEnhancedSupportScripts()
 {
     new EnhancedSupportWorldScript();
     new EnhancedSupportMailFilter();
     new EnhancedSupportChatFilter();
     new EnhancedSupportLootFilter();
+    new EnhancedSupportInviteFilter();
 }
