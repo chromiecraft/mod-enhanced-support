@@ -770,7 +770,7 @@ public:
             return true;
 
         // Log-only: flag unusually large gold transfers without blocking them.
-        LogHighValueMail(player, receiverGuid, money);
+        LogHighValueMail(player, receiverGuid, money, subject);
 
         if (_mailFilterAction == MAIL_FILTER_DISABLED || _mailFilterKeywords.empty())
             return true;
@@ -830,7 +830,7 @@ private:
         return name;
     }
 
-    static void LogHighValueMail(Player* player, ObjectGuid receiverGuid, uint32 money)
+    static void LogHighValueMail(Player* player, ObjectGuid receiverGuid, uint32 money, std::string const& subject)
     {
         if (_goldFilterThresholdCopper == 0 || money < _goldFilterThresholdCopper)
             return;
@@ -840,21 +840,22 @@ private:
         std::string const receiverName = ResolveCharacterName(receiverGuid);
 
         LOG_INFO("module.enhancedsupport",
-            "MailFilter: high-value mail from {} ({}) to {} ({}) - {} (threshold {}) | Account {} | IP {}",
+            "MailFilter: high-value mail from {} ({}) to {} ({}) - {} (threshold {}) | Account {} | IP {} | subject: \"{}\"",
             player->GetName(), player->GetGUID().GetCounter(),
             receiverName, receiverGuid.GetCounter(),
             amount, threshold,
-            player->GetSession()->GetAccountId(), player->GetSession()->GetRemoteAddress());
+            player->GetSession()->GetAccountId(), player->GetSession()->GetRemoteAddress(), subject);
 
 #ifdef HAS_CHAT_TRANSMITTER
         std::string note = Acore::StringFormat(
             "💰 **High-value mail** — {} (threshold {})\n"
             "👤 From: **{}** (GUID {}) | Account {} | IP {}\n"
-            "📬 To: **{}** (GUID {})",
+            "📬 To: **{}** (GUID {})\n"
+            "✉️ Subject: {}",
             amount, threshold,
             player->GetName(), player->GetGUID().GetCounter(),
             player->GetSession()->GetAccountId(), player->GetSession()->GetRemoteAddress(),
-            receiverName, receiverGuid.GetCounter());
+            receiverName, receiverGuid.GetCounter(), subject);
         sChatTransmitter->QueueNotification("MailFilter", note);
 #endif
     }
