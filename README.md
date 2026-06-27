@@ -36,6 +36,11 @@ The `Action` option controls how matches are handled:
 | `3`    | Block mail + permanently ban the sender's account   |
 | `4`    | Block mail + permanently ban the account and its IP |
 
+Enable `EnhancedSupport.MailFilter.SkipSameAccount` to bypass the mail checks for
+mail between two characters on the same account (sending to your own alt). It
+skips both the keyword filter and the high-value gold logging, since a
+self-transfer is never advertising or gold selling.
+
 ### Chat keyword filter
 
 Scans player `SAY`, `YELL`, `EMOTE`, `PARTY` and `WHISPER` messages against the

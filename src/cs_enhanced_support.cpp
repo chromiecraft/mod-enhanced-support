@@ -69,6 +69,8 @@ public:
         handler->PSendSysMessage("  Module enabled: {}", EnhancedSupport::IsEnabled() ? "yes" : "no");
         handler->PSendSysMessage("  Mail filter action: {} ({})",
             static_cast<uint32>(EnhancedSupport::GetMailFilterAction()), EnhancedSupport::GetMailFilterActionName());
+        handler->PSendSysMessage("  Mail skip same-account: {}",
+            EnhancedSupport::GetMailSkipSameAccount() ? "yes" : "no");
         handler->PSendSysMessage("  Chat filter action: {} ({})",
             static_cast<uint32>(EnhancedSupport::GetChatFilterAction()), EnhancedSupport::GetChatFilterActionName());
 

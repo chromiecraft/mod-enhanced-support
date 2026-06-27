@@ -79,6 +79,10 @@ namespace
     std::string _mailFilterBanAuthor;
     std::vector<std::string> _mailFilterKeywords;
 
+    // When set, mail between two characters on the same account (sending to your
+    // own alt) skips the keyword and high-value checks entirely.
+    bool _mailSkipSameAccount = false;
+
     // Same keyword list and action scale as the mail filter, applied to SAY/YELL/EMOTE.
     uint8 _chatFilterAction = MAIL_FILTER_DISABLED;
     std::string _chatFilterMessage;
@@ -566,6 +570,11 @@ namespace EnhancedSupport
         return _mailFilterMessage;
     }
 
+    bool GetMailSkipSameAccount()
+    {
+        return _mailSkipSameAccount;
+    }
+
     uint8 GetChatFilterAction()
     {
         return _chatFilterAction;
@@ -648,6 +657,7 @@ namespace EnhancedSupport
         _mailFilterMessage = sConfigMgr->GetOption<std::string>("EnhancedSupport.MailFilter.Message",
             "Your mail was blocked because it contains a prohibited keyword.");
         _mailFilterBanAuthor = sConfigMgr->GetOption<std::string>("EnhancedSupport.MailFilter.BanAuthor", "SupportModule");
+        _mailSkipSameAccount = sConfigMgr->GetOption<bool>("EnhancedSupport.MailFilter.SkipSameAccount", false);
 
         _chatFilterAction = sConfigMgr->GetOption<uint8>("EnhancedSupport.ChatFilter.Action", MAIL_FILTER_DISABLED);
         _chatFilterMessage = sConfigMgr->GetOption<std::string>("EnhancedSupport.ChatFilter.Message",
@@ -769,6 +779,11 @@ public:
         if (!_enabled)
             return true;
 
+        // Sending to your own alt (same account) is never advertising or gold
+        // selling, so skip both the keyword and high-value checks when enabled.
+        if (_mailSkipSameAccount && IsSameAccountTransfer(player, receiverGuid))
+            return true;
+
         // Log-only: flag unusually large gold transfers without blocking them.
         LogHighValueMail(player, receiverGuid, money, subject);
 
@@ -828,6 +843,13 @@ private:
         if (!sCharacterCache->GetCharacterNameByGuid(guid, name) || name.empty())
             name = "Unknown";
         return name;
+    }
+
+    // True if the receiver character belongs to the sender's account.
+    static bool IsSameAccountTransfer(Player* sender, ObjectGuid receiverGuid)
+    {
+        uint32 const receiverAccountId = sCharacterCache->GetCharacterAccountIdByGuid(receiverGuid);
+        return receiverAccountId != 0 && receiverAccountId == sender->GetSession()->GetAccountId();
     }
 
     static void LogHighValueMail(Player* player, ObjectGuid receiverGuid, uint32 money, std::string const& subject)

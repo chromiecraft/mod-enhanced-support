@@ -55,6 +55,18 @@ EnhancedSupport.MailFilter.Message = "Your mail was blocked because it contains 
 EnhancedSupport.MailFilter.BanAuthor = "SupportModule"
 
 #
+#    EnhancedSupport.MailFilter.SkipSameAccount
+#        Description: When enabled, mail sent between two characters on the same account
+#                     (i.e. to your own alt) bypasses the mail checks entirely - both the
+#                     keyword filter and the high-value (gold) logging. Self-transfers are
+#                     never advertising or gold selling, so this removes that noise.
+#        Default:     0 - Same-account mail is checked like any other
+#                     1 - Skip the mail checks for same-account transfers
+#
+
+EnhancedSupport.MailFilter.SkipSameAccount = 0
+
+#
 #    EnhancedSupport.ChatFilter.Action
 #        Description: What to do when a player's SAY, YELL, EMOTE, PARTY or WHISPER message
 #                     contains a configured keyword. Uses the same keyword list as the mail filter

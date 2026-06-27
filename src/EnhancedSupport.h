@@ -44,6 +44,7 @@ namespace EnhancedSupport
     uint8 GetMailFilterAction();
     std::string_view GetMailFilterActionName();
     std::string const& GetMailFilterMessage();
+    bool GetMailSkipSameAccount();
     uint8 GetChatFilterAction();
     std::string_view GetChatFilterActionName();
     uint8 GetAggressiveMaxLevel();
