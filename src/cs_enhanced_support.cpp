@@ -36,8 +36,9 @@ public:
     {
         static ChatCommandTable listTable =
         {
-            { "bans",     HandleListBansCommand,     SEC_GAMEMASTER, Console::Yes },
-            { "keywords", HandleListKeywordsCommand, SEC_GAMEMASTER, Console::Yes },
+            { "bans",          HandleListBansCommand,          SEC_GAMEMASTER, Console::Yes },
+            { "keywords",      HandleListKeywordsCommand,      SEC_GAMEMASTER, Console::Yes },
+            { "emailpatterns", HandleListEmailPatternsCommand, SEC_GAMEMASTER, Console::Yes },
         };
 
         static ChatCommandTable keywordTable =
@@ -46,13 +47,20 @@ public:
             { "remove", HandleKeywordRemoveCommand, SEC_ADMINISTRATOR, Console::Yes },
         };
 
+        static ChatCommandTable emailPatternTable =
+        {
+            { "add",    HandleEmailPatternAddCommand,    SEC_ADMINISTRATOR, Console::Yes },
+            { "remove", HandleEmailPatternRemoveCommand, SEC_ADMINISTRATOR, Console::Yes },
+        };
+
         static ChatCommandTable supportTable =
         {
-            { "info",    HandleInfoCommand,   SEC_GAMEMASTER,    Console::Yes },
-            { "action",  HandleActionCommand, SEC_ADMINISTRATOR, Console::Yes },
-            { "reload",  HandleReloadCommand, SEC_ADMINISTRATOR, Console::Yes },
-            { "list",    listTable },
-            { "keyword", keywordTable },
+            { "info",         HandleInfoCommand,   SEC_GAMEMASTER,    Console::Yes },
+            { "action",       HandleActionCommand, SEC_ADMINISTRATOR, Console::Yes },
+            { "reload",       HandleReloadCommand, SEC_ADMINISTRATOR, Console::Yes },
+            { "list",         listTable },
+            { "keyword",      keywordTable },
+            { "emailpattern", emailPatternTable },
         };
 
         static ChatCommandTable commandTable =
@@ -90,6 +98,7 @@ public:
                 windowSize, windowSeconds, static_cast<uint32>(aggressiveMaxLevel));
 
         handler->PSendSysMessage("  Keywords loaded: {}", EnhancedSupport::GetKeywords().size());
+        handler->PSendSysMessage("  Email patterns loaded: {}", EnhancedSupport::GetEmailPatterns().size());
 
         uint8 const inviteAction = EnhancedSupport::GetInviteFilterAction();
         uint32 const inviteCount = EnhancedSupport::GetInviteRateCount();
@@ -186,7 +195,8 @@ public:
         sConfigMgr->LoadModulesConfigs(true, false);
         EnhancedSupport::LoadConfig();
         EnhancedSupport::LoadKeywords();
-        handler->PSendSysMessage("mod-enhanced-support: configuration and keywords reloaded.");
+        EnhancedSupport::LoadEmailPatterns();
+        handler->PSendSysMessage("mod-enhanced-support: configuration, keywords and email patterns reloaded.");
         return true;
     }
 
@@ -246,6 +256,65 @@ public:
 
         EnhancedSupport::RemoveKeyword(normalized);
         handler->PSendSysMessage("Removed mail keyword: {}", normalized);
+        return true;
+    }
+
+    static bool HandleListEmailPatternsCommand(ChatHandler* handler)
+    {
+        std::vector<std::string> const& patterns = EnhancedSupport::GetEmailPatterns();
+        if (patterns.empty())
+        {
+            handler->SendSysMessage("mod-enhanced-support: no email patterns configured.");
+            return true;
+        }
+
+        handler->PSendSysMessage("mod-enhanced-support: {} email pattern(s):", patterns.size());
+        for (std::string const& pattern : patterns)
+            handler->PSendSysMessage(" - {}", pattern);
+
+        return true;
+    }
+
+    static bool HandleEmailPatternAddCommand(ChatHandler* handler, Tail pattern)
+    {
+        std::string normalized = EnhancedSupport::NormalizeKeyword(pattern);
+        if (normalized.empty())
+        {
+            handler->SendSysMessage("Usage: .support emailpattern add <pattern>");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        if (EnhancedSupport::HasEmailPattern(normalized))
+        {
+            handler->PSendSysMessage("Email pattern already present: {}", normalized);
+            return true;
+        }
+
+        EnhancedSupport::AddEmailPattern(normalized);
+        handler->PSendSysMessage("Added email pattern: {}", normalized);
+        return true;
+    }
+
+    static bool HandleEmailPatternRemoveCommand(ChatHandler* handler, Tail pattern)
+    {
+        std::string normalized = EnhancedSupport::NormalizeKeyword(pattern);
+        if (normalized.empty())
+        {
+            handler->SendSysMessage("Usage: .support emailpattern remove <pattern>");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        if (!EnhancedSupport::HasEmailPattern(normalized))
+        {
+            handler->PSendSysMessage("Email pattern not found: {}", normalized);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        EnhancedSupport::RemoveEmailPattern(normalized);
+        handler->PSendSysMessage("Removed email pattern: {}", normalized);
         return true;
     }
 

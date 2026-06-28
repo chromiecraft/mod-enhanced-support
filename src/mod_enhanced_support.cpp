@@ -82,6 +82,11 @@ namespace
     std::string _mailFilterBanAuthor;
     std::vector<std::string> _mailFilterKeywords;
 
+    // Email substrings matched against an account's email when one of its characters
+    // is created. Log-only; surfaces bot/gold-seller accounts that register with
+    // recognizable email patterns. Stored lowercased, like the mail keywords.
+    std::vector<std::string> _emailPatterns;
+
     // When set, mail between two characters on the same account (sending to your
     // own alt) skips the keyword and high-value checks entirely.
     bool _mailSkipSameAccount = false;
@@ -220,6 +225,20 @@ namespace
         {
             if (haystack.find(keyword) != std::string::npos)
                 return keyword;
+        }
+
+        return {};
+    }
+
+    // Returns the first email pattern contained in the address (case-insensitive),
+    // or empty if none match.
+    std::string FindMatchingEmailPattern(std::string const& email)
+    {
+        std::string const haystack = ToLowerAscii(email);
+        for (std::string const& pattern : _emailPatterns)
+        {
+            if (haystack.find(pattern) != std::string::npos)
+                return pattern;
         }
 
         return {};
@@ -702,6 +721,50 @@ namespace EnhancedSupport
         LoadKeywords();
     }
 
+    // Email patterns live in the auth DB (enhanced_support_email_patterns) and are
+    // cached here so the character-create hook doesn't hit the DB for the list.
+    void LoadEmailPatterns()
+    {
+        _emailPatterns.clear();
+
+        QueryResult result = LoginDatabase.Query("SELECT pattern FROM enhanced_support_email_patterns");
+        if (!result)
+            return;
+
+        do
+        {
+            std::string pattern = NormalizeKeyword(result->Fetch()[0].Get<std::string>());
+            if (!pattern.empty())
+                _emailPatterns.push_back(pattern);
+        } while (result->NextRow());
+    }
+
+    std::vector<std::string> const& GetEmailPatterns()
+    {
+        return _emailPatterns;
+    }
+
+    bool HasEmailPattern(std::string const& normalized)
+    {
+        return std::find(_emailPatterns.begin(), _emailPatterns.end(), normalized) != _emailPatterns.end();
+    }
+
+    void AddEmailPattern(std::string const& normalized)
+    {
+        std::string escaped = normalized;
+        LoginDatabase.EscapeString(escaped);
+        LoginDatabase.Execute("INSERT IGNORE INTO enhanced_support_email_patterns (pattern) VALUES ('{}')", escaped);
+        LoadEmailPatterns();
+    }
+
+    void RemoveEmailPattern(std::string const& normalized)
+    {
+        std::string escaped = normalized;
+        LoginDatabase.EscapeString(escaped);
+        LoginDatabase.Execute("DELETE FROM enhanced_support_email_patterns WHERE pattern = '{}'", escaped);
+        LoadEmailPatterns();
+    }
+
     std::string const& GetBanAuthor()
     {
         return _mailFilterBanAuthor;
@@ -936,6 +999,7 @@ public:
     void OnStartup() override
     {
         EnhancedSupport::LoadKeywords();
+        EnhancedSupport::LoadEmailPatterns();
 
         if (!_enabled || !_startupNoticeEnabled)
             return;
@@ -1592,6 +1656,56 @@ private:
     }
 };
 
+// Logs (without blocking) when a newly created character's account email matches a
+// configured substring pattern - surfaces bot/gold-seller accounts that register with
+// recognizable email patterns. Patterns live in the auth DB and are managed like the
+// mail keywords. Log-only; relayed to Discord via the ChatFilter alias.
+class EnhancedSupportEmailFilter : public PlayerScript
+{
+public:
+    EnhancedSupportEmailFilter() : PlayerScript("EnhancedSupportEmailFilter", {
+        PLAYERHOOK_ON_CREATE
+    }) { }
+
+    void OnPlayerCreate(Player* player) override
+    {
+        if (!_enabled || _emailPatterns.empty())
+            return;
+
+        uint32 const accountId = player->GetSession()->GetAccountId();
+
+        // Character creation is infrequent, so a single synchronous read here is fine.
+        LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_GET_EMAIL_BY_ID);
+        stmt->SetData(0, accountId);
+        PreparedQueryResult result = LoginDatabase.Query(stmt);
+        if (!result)
+            return;
+
+        std::string const email = result->Fetch()[0].Get<std::string>();
+        if (email.empty())
+            return;
+
+        std::string const matched = FindMatchingEmailPattern(email);
+        if (matched.empty())
+            return;
+
+        LOG_INFO("module.enhancedsupport",
+            "EmailFilter: new character {} ({}) on account {} matched email pattern '{}' | email {} | IP {}",
+            player->GetName(), player->GetGUID().GetCounter(), accountId, matched, email,
+            player->GetSession()->GetRemoteAddress());
+
+#ifdef HAS_CHAT_TRANSMITTER
+        std::string note = Acore::StringFormat(
+            "📧 **Suspicious account email** — pattern `{}`\n"
+            "👤 New character: **{}** (GUID {}) | Account {} | IP {}\n"
+            "✉️ Email: {}",
+            matched, player->GetName(), player->GetGUID().GetCounter(),
+            accountId, player->GetSession()->GetRemoteAddress(), email);
+        sChatTransmitter->QueueNotification("ChatFilter", note);
+#endif
+    }
+};
+
 void AddEnhancedSupportScripts()
 {
     new EnhancedSupportWorldScript();
@@ -1600,4 +1714,5 @@ void AddEnhancedSupportScripts()
     new EnhancedSupportLootFilter();
     new EnhancedSupportInviteFilter();
     new EnhancedSupportAuctionFilter();
+    new EnhancedSupportEmailFilter();
 }

@@ -39,6 +39,14 @@ namespace EnhancedSupport
     void AddKeyword(std::string const& normalized);
     void RemoveKeyword(std::string const& normalized);
 
+    // Email substrings matched against an account's email at character creation.
+    // Stored and matched like keywords (trimmed, lowercased, case-insensitive substring).
+    void LoadEmailPatterns();
+    std::vector<std::string> const& GetEmailPatterns();
+    bool HasEmailPattern(std::string const& normalized);
+    void AddEmailPattern(std::string const& normalized);
+    void RemoveEmailPattern(std::string const& normalized);
+
     // Current active settings (for the .support info command).
     bool IsEnabled();
     uint8 GetMailFilterAction();

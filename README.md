@@ -148,6 +148,21 @@ to coalesce them into a single message, sent once no further item has arrived fr
 that source for that many seconds (or when the looter switches source or logs out).
 This affects the Discord notification only; the server log keeps one line per item.
 
+### Account email pattern logger
+
+Logs when a newly created character belongs to an account whose email contains
+any configured substring pattern (case-insensitive). Intended to surface
+bot/gold-seller accounts that register with recognizable email patterns. This is
+log-only: character creation is never blocked. Matches are written under
+`module.enhancedsupport` and, when mod-chat-transmitter is available, relayed to
+Discord (sharing the chat filter's channel), identifying the new character, its
+account and the matched pattern.
+
+Patterns live in the auth DB table `enhanced_support_email_patterns`, managed with
+the `.support emailpattern` commands below and shared across all realms, like the
+mail keywords. The check runs whenever at least one pattern is configured, so there
+is no separate config option to enable it.
+
 ### Startup Discord notice
 
 When enabled, posts a decorated Discord message once the world server has
@@ -164,12 +179,15 @@ All commands live under `.support` and work in-game and from the server console.
 
 | Command                                  | Security      | Description                                                                                  |
 | ---------------------------------------- | ------------- | -------------------------------------------------------------------------------------------- |
-| `.support info`                          | Game Master   | Shows active settings: enabled state, mail and chat filter actions, keyword count, ban author, message. |
+| `.support info`                          | Game Master   | Shows active settings: enabled state, mail and chat filter actions, keyword and email-pattern counts, ban author, message. |
 | `.support action <0-4>`                  | Administrator | Overrides the mail filter action at runtime (not saved; reverts on `.support reload` or restart). |
 | `.support reload`                        | Administrator | Reloads this module's config and keywords, independent of the global `.reload config`.       |
 | `.support keyword add <keyword>`         | Administrator | Adds a blocked keyword (stored lowercased).                                                   |
 | `.support keyword remove <keyword>`      | Administrator | Removes a blocked keyword.                                                                    |
 | `.support list keywords`                 | Game Master   | Lists the blocked keywords.                                                                   |
+| `.support emailpattern add <pattern>`    | Administrator | Adds an email substring pattern (stored lowercased).                                          |
+| `.support emailpattern remove <pattern>` | Administrator | Removes an email pattern.                                                                     |
+| `.support list emailpatterns`            | Game Master   | Lists the configured email patterns.                                                          |
 | `.support list bans [count] [author]`    | Game Master   | Lists the most recent account bans (newest first). `count` defaults to 10, max 50; `author` filters by the ban author substring and defaults to `EnhancedSupport.MailFilter.BanAuthor`, so a bare call shows the module's own bans. |
 
 Examples: `.support keyword add wowgold`, `.support list keywords`,
@@ -198,8 +216,9 @@ Examples: `.support keyword add wowgold`, `.support list keywords`,
 - `src/EnhancedSupport.h` — shared config/keyword API used by both `.cpp` files.
 - `conf/mod-enhanced-support.conf.dist` — distributed config template.
 - `data/sql/db-auth`, `data/sql/db-world` — `base`/`updates` SQL applied
-  automatically by the module DB updater. The mail keyword table lives in
-  `db-auth/updates`; the `.support` command help rows in `db-world/updates`.
+  automatically by the module DB updater. The mail keyword and email pattern
+  tables live in `db-auth/updates`; the `.support` command help rows in
+  `db-world/updates`.
 
 ## License
 
