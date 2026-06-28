@@ -148,6 +148,12 @@ public:
             handler->PSendSysMessage("  Auction filter: quality {}, grey: {}, scope: {}",
                 quality, grey,
                 EnhancedSupport::GetAuctionFilterOnListing() ? "sales + listings" : "sales only");
+
+            uint32 const auctionBatch = EnhancedSupport::GetAuctionBatchSeconds();
+            if (auctionBatch == 0)
+                handler->SendSysMessage("  Auction notification batching: off (one per auction)");
+            else
+                handler->PSendSysMessage("  Auction notification batching: {}s window", auctionBatch);
         }
 
         handler->PSendSysMessage("  Ban author: {}", EnhancedSupport::GetBanAuthor());

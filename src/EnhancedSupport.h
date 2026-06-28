@@ -89,6 +89,10 @@ namespace EnhancedSupport
     uint32 GetAuctionFilterGreyMinPrice();
     bool GetAuctionFilterOnListing();
 
+    // Seconds of inactivity before a seller's batched Discord auction notification is
+    // sent; 0 sends one notification per auction (no batching).
+    uint32 GetAuctionBatchSeconds();
+
     // Formats a copper amount as a "Xg Ys Zc" string.
     std::string FormatMoney(uint32 copper);
 

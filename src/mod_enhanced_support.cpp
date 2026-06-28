@@ -146,6 +146,7 @@ namespace
     bool _auctionFilterAlwaysLogGrey = false;    // flag every grey item, ignoring price
     uint32 _auctionFilterGreyMinPriceCopper = 0; // grey-specific price (copper) at/above which to flag
     bool _auctionFilterOnListing = false;        // also flag suspicious listings, not just completed sales
+    uint32 _auctionBatchSeconds = 0;             // coalesce a seller's flagged auctions into one Discord notice; 0 = one per item
 
     bool _startupNoticeEnabled = false;
     std::string _startupNoticeMessage;
@@ -352,6 +353,19 @@ namespace
         return static_cast<uint32>(history.size());
     }
 
+    char const* QualityName(uint32 quality)
+    {
+        switch (quality)
+        {
+            case ITEM_QUALITY_POOR:     return "grey";
+            case ITEM_QUALITY_NORMAL:   return "white";
+            case ITEM_QUALITY_UNCOMMON: return "green";
+            case ITEM_QUALITY_RARE:     return "blue";
+            case ITEM_QUALITY_EPIC:     return "purple";
+            default:                    return "other";
+        }
+    }
+
 #ifdef HAS_CHAT_TRANSMITTER
     // Buffered underlevel-loot items for one looter, coalesced into a single
     // Discord notification. Holds only captured values (no live Player*), since
@@ -466,6 +480,103 @@ namespace
             {
                 EmitLootBatch(it->second);
                 it = _lootBatches.erase(it);
+            }
+            else
+                ++it;
+        }
+    }
+
+    // Buffered flagged auctions for one seller, coalesced into a single Discord
+    // notification (e.g. when a seller posts many items at once). Holds only
+    // captured values, since it is flushed up to _auctionBatchSeconds later.
+    struct AuctionBatchItem
+    {
+        std::string itemName;
+        uint32 itemId;
+        uint32 count;
+        uint32 quality;
+        uint32 price;
+        uint32 vendorValue;
+        std::string buyer;  // formatted buyer line; empty for listings
+    };
+
+    struct AuctionBatch
+    {
+        std::string event;   // "listing"/"sale"; a change flushes the prior batch
+        std::string header;  // seller line (name/GUID/account/IP)
+        std::vector<AuctionBatchItem> items;
+        time_t lastUpdate = 0;
+    };
+
+    std::unordered_map<ObjectGuid /*seller*/, AuctionBatch> _auctionBatches;
+
+    void EmitAuctionBatch(AuctionBatch const& batch)
+    {
+        if (batch.items.empty())
+            return;
+
+        bool const multi = batch.items.size() > 1;
+
+        std::string itemsBlock;
+        for (AuctionBatchItem const& it : batch.items)
+        {
+            if (!itemsBlock.empty())
+                itemsBlock.push_back('\n');
+
+            itemsBlock += Acore::StringFormat(
+                "🏷️ [{}](https://wowgaming.altervista.org/aowow/?item={}) (id {}, {}) x{} — {} (vendor value {})",
+                it.itemName, it.itemId, it.itemId, QualityName(it.quality), it.count,
+                EnhancedSupport::FormatMoney(it.price), EnhancedSupport::FormatMoney(it.vendorValue));
+
+            if (!it.buyer.empty())
+                itemsBlock += Acore::StringFormat("\n   🛒 Buyer: {}", it.buyer);
+        }
+
+        std::string const headline = multi
+            ? Acore::StringFormat("🪙 **Suspicious auctions ({})** — {} items", batch.event, batch.items.size())
+            : Acore::StringFormat("🪙 **Suspicious auction ({})**", batch.event);
+
+        std::string note = Acore::StringFormat("{}\n{}\n{}", headline, batch.header, itemsBlock);
+        sChatTransmitter->QueueNotification("AuctionFilter", note);
+    }
+
+    // Adds one flagged auction to the seller's batch (or emits immediately when
+    // batching is off). A change of event kind flushes the previous batch first, so
+    // listings and sales never share a notification.
+    void QueueOrBatchAuction(ObjectGuid seller, std::string event, std::string header, AuctionBatchItem item)
+    {
+        if (_auctionBatchSeconds == 0)
+        {
+            AuctionBatch single;
+            single.event = std::move(event);
+            single.header = std::move(header);
+            single.items.push_back(std::move(item));
+            EmitAuctionBatch(single);
+            return;
+        }
+
+        AuctionBatch& batch = _auctionBatches[seller];
+        if (!batch.items.empty() && batch.event != event)
+        {
+            EmitAuctionBatch(batch);
+            batch = AuctionBatch{};
+        }
+
+        batch.event = std::move(event);
+        batch.header = std::move(header);
+        batch.items.push_back(std::move(item));
+        batch.lastUpdate = GameTime::GetGameTime().count();
+    }
+
+    // Emits and drops batches that have gone _auctionBatchSeconds without a new item.
+    void FlushDueAuctionBatches(time_t now)
+    {
+        for (auto it = _auctionBatches.begin(); it != _auctionBatches.end(); )
+        {
+            if (now - it->second.lastUpdate >= static_cast<time_t>(_auctionBatchSeconds))
+            {
+                EmitAuctionBatch(it->second);
+                it = _auctionBatches.erase(it);
             }
             else
                 ++it;
@@ -737,6 +848,11 @@ namespace EnhancedSupport
         return _auctionFilterOnListing;
     }
 
+    uint32 GetAuctionBatchSeconds()
+    {
+        return _auctionBatchSeconds;
+    }
+
     std::string FormatMoney(uint32 copper)
     {
         return Acore::StringFormat("{}g {}s {}c", copper / GOLD, (copper % GOLD) / SILVER, copper % SILVER);
@@ -790,6 +906,7 @@ namespace EnhancedSupport
         _auctionFilterOnListing = sConfigMgr->GetOption<bool>("EnhancedSupport.AuctionFilter.OnListing", false);
         _auctionFilterMinPriceCopper = ParseMoneyOption("EnhancedSupport.AuctionFilter.MinPrice");
         _auctionFilterGreyMinPriceCopper = ParseMoneyOption("EnhancedSupport.AuctionFilter.GreyMinPrice");
+        _auctionBatchSeconds = sConfigMgr->GetOption<uint32>("EnhancedSupport.AuctionFilter.BatchSeconds", 0);
 
         _startupNoticeEnabled = sConfigMgr->GetOption<bool>("EnhancedSupport.StartupNotice.Enable", false);
         _startupNoticeMessage = sConfigMgr->GetOption<std::string>("EnhancedSupport.StartupNotice.Message", "Server restarted!");
@@ -836,8 +953,11 @@ public:
         _scheduler.Update(diff);
 
 #ifdef HAS_CHAT_TRANSMITTER
+        time_t const now = GameTime::GetGameTime().count();
         if (!_lootBatches.empty())
-            FlushDueLootBatches(GameTime::GetGameTime().count());
+            FlushDueLootBatches(now);
+        if (!_auctionBatches.empty())
+            FlushDueAuctionBatches(now);
 #endif
     }
 
@@ -1436,19 +1556,6 @@ private:
         return info;
     }
 
-    static char const* QualityName(uint32 quality)
-    {
-        switch (quality)
-        {
-            case ITEM_QUALITY_POOR:     return "grey";
-            case ITEM_QUALITY_NORMAL:   return "white";
-            case ITEM_QUALITY_UNCOMMON: return "green";
-            case ITEM_QUALITY_RARE:     return "blue";
-            case ITEM_QUALITY_EPIC:     return "purple";
-            default:                    return "other";
-        }
-    }
-
     static void Report(char const* event, ItemTemplate const* proto, uint32 itemId, uint32 count,
         uint32 price, ObjectGuid seller, ObjectGuid buyer)
     {
@@ -1458,11 +1565,11 @@ private:
 
         PartyInfo const sellerInfo = ResolveParty(seller);
 
-        std::string buyerLog = "n/a";
+        std::string buyerLine;  // empty for listings (buyer unknown)
         if (buyer)
         {
             PartyInfo const buyerInfo = ResolveParty(buyer);
-            buyerLog = Acore::StringFormat("{} ({}, account {}, IP {})",
+            buyerLine = Acore::StringFormat("{} (GUID {}, account {}, IP {})",
                 buyerInfo.name, buyer.GetCounter(), buyerInfo.account, buyerInfo.ip);
         }
 
@@ -1470,25 +1577,15 @@ private:
             "AuctionFilter: suspicious {} - {}x [{}] (id {}, {}) for {} (vendor value {}) | Seller: {} ({}, account {}, IP {}) | Buyer: {}",
             event, count, itemName, itemId, QualityName(quality),
             EnhancedSupport::FormatMoney(price), EnhancedSupport::FormatMoney(vendorValue),
-            sellerInfo.name, seller.GetCounter(), sellerInfo.account, sellerInfo.ip, buyerLog);
+            sellerInfo.name, seller.GetCounter(), sellerInfo.account, sellerInfo.ip,
+            buyerLine.empty() ? "n/a" : buyerLine);
 
 #ifdef HAS_CHAT_TRANSMITTER
-        std::string note = Acore::StringFormat(
-            "🪙 **Suspicious auction ({})** — {} (vendor value {})\n"
-            "🏷️ Item: [{}](https://wowgaming.altervista.org/aowow/?item={}) (id {}, {}) x{}\n"
-            "👤 Seller: **{}** (GUID {}, account {}, IP {})",
-            event, EnhancedSupport::FormatMoney(price), EnhancedSupport::FormatMoney(vendorValue),
-            itemName, itemId, itemId, QualityName(quality), count,
+        std::string header = Acore::StringFormat("👤 Seller: **{}** (GUID {}, account {}, IP {})",
             sellerInfo.name, seller.GetCounter(), sellerInfo.account, sellerInfo.ip);
 
-        if (buyer)
-        {
-            PartyInfo const buyerInfo = ResolveParty(buyer);
-            note += Acore::StringFormat("\n🛒 Buyer: **{}** (GUID {}, account {}, IP {})",
-                buyerInfo.name, buyer.GetCounter(), buyerInfo.account, buyerInfo.ip);
-        }
-
-        sChatTransmitter->QueueNotification("AuctionFilter", note);
+        QueueOrBatchAuction(seller, event, std::move(header),
+            AuctionBatchItem{ itemName, itemId, count, quality, price, vendorValue, std::move(buyerLine) });
 #endif
     }
 };

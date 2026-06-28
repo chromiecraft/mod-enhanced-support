@@ -303,13 +303,27 @@ EnhancedSupport.AuctionFilter.GreyMinPrice = "0"
 #        Description: By default only completed sales are flagged (that is where value actually
 #                     changes hands, and both seller and buyer are known). Enable this to also
 #                     flag the suspicious listing when it is first posted, as an early warning -
-#                     at listing time the buyer is not yet known. Has no effect unless
-#                     AuctionFilter.MaxQuality is set (>= 0).
+#                     at listing time the buyer is not yet known. Has no effect unless the
+#                     auction filter is active (any of MaxQuality / AlwaysLogGrey / GreyMinPrice).
 #        Default:     0 - Flag completed sales only
 #                     1 - Also flag suspicious listings when posted
 #
 
 EnhancedSupport.AuctionFilter.OnListing = 0
+
+#
+#    EnhancedSupport.AuctionFilter.BatchSeconds
+#        Description: When a seller has several flagged auctions in a row (for example, posting
+#                     many items at once), coalesce them into a single Discord notification instead
+#                     of one per auction. The batch is sent once no further flagged auction has
+#                     arrived from that seller for this many seconds. Listings and sales are batched
+#                     separately. Affects the Discord notification only - the server log keeps one
+#                     line per auction. Requires mod-chat-transmitter.
+#        Default:     0 - No batching (one notification per auction)
+#                     e.g. 5 - Group auctions flagged within 5 seconds of each other
+#
+
+EnhancedSupport.AuctionFilter.BatchSeconds = 0
 
 #
 #    EnhancedSupport.StartupNotice.Enable
