@@ -537,7 +537,9 @@ namespace
             : Acore::StringFormat("🪙 **Suspicious auction ({})**", batch.event);
 
         std::string note = Acore::StringFormat("{}\n{}\n{}", headline, batch.header, itemsBlock);
-        sChatTransmitter->QueueNotification("AuctionFilter", note);
+        // Reuse the ChatFilter notification alias so this routes to an already-configured
+        // Discord channel without needing a new mod-chat-transmitter config entry.
+        sChatTransmitter->QueueNotification("ChatFilter", note);
     }
 
     // Adds one flagged auction to the seller's batch (or emits immediately when
