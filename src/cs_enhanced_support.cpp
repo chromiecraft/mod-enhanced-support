@@ -129,6 +129,27 @@ public:
                 handler->PSendSysMessage("  Loot notification batching: {}s window", lootBatch);
         }
 
+        int32 const auctionMaxQuality = EnhancedSupport::GetAuctionFilterMaxQuality();
+        bool const auctionAlwaysGrey = EnhancedSupport::GetAuctionFilterAlwaysLogGrey();
+        uint32 const auctionGreyMinPrice = EnhancedSupport::GetAuctionFilterGreyMinPrice();
+        if (auctionMaxQuality < 0 && !auctionAlwaysGrey && auctionGreyMinPrice == 0)
+            handler->SendSysMessage("  Auction filter: disabled");
+        else
+        {
+            std::string const quality = auctionMaxQuality < 0
+                ? "off"
+                : Acore::StringFormat("<= {} (price >= {})", auctionMaxQuality,
+                    EnhancedSupport::FormatMoney(EnhancedSupport::GetAuctionFilterMinPrice()));
+            std::string const grey = auctionAlwaysGrey
+                ? "always"
+                : (auctionGreyMinPrice == 0
+                    ? "follows quality rule"
+                    : Acore::StringFormat("price >= {}", EnhancedSupport::FormatMoney(auctionGreyMinPrice)));
+            handler->PSendSysMessage("  Auction filter: quality {}, grey: {}, scope: {}",
+                quality, grey,
+                EnhancedSupport::GetAuctionFilterOnListing() ? "sales + listings" : "sales only");
+        }
+
         handler->PSendSysMessage("  Ban author: {}", EnhancedSupport::GetBanAuthor());
 
         std::string const& message = EnhancedSupport::GetMailFilterMessage();

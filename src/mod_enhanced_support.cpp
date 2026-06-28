@@ -16,6 +16,7 @@
  */
 
 #include "EnhancedSupport.h"
+#include "AuctionHouseMgr.h"
 #include "BanMgr.h"
 #include "CharacterCache.h"
 #include "Chat.h"
@@ -33,8 +34,10 @@
 #include "Map.h"
 #include "ObjectAccessor.h"
 #include "ObjectGuid.h"
+#include "ObjectMgr.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include "SharedDefines.h"
 #include "SocialMgr.h"
 #include "StringConvert.h"
 #include "StringFormat.h"
@@ -130,6 +133,20 @@ namespace
     // server log keeps one line per item regardless.
     uint32 _lootBatchSeconds = 0;
 
+    // Surfaces low-quality items auctioned for an unreasonable price - a channel
+    // sometimes used to move value between characters under the guise of a normal
+    // sale. Log-only; the auction is never blocked. An auction is flagged when its
+    // item quality is at or below MaxQuality and its price is at or above MinPrice.
+    // MaxQuality is an item quality (0 grey, 1 white, 2 green, ...); < 0 disables it.
+    // Grey items have their own rules, independent of MaxQuality/MinPrice: AlwaysLogGrey
+    // flags every grey item at any price, and GreyMinPrice flags grey items at/above a
+    // dedicated price. Either works even when MaxQuality is off.
+    int32 _auctionFilterMaxQuality = -1;
+    uint32 _auctionFilterMinPriceCopper = 0;     // price (copper) at/above which a match is flagged
+    bool _auctionFilterAlwaysLogGrey = false;    // flag every grey item, ignoring price
+    uint32 _auctionFilterGreyMinPriceCopper = 0; // grey-specific price (copper) at/above which to flag
+    bool _auctionFilterOnListing = false;        // also flag suspicious listings, not just completed sales
+
     bool _startupNoticeEnabled = false;
     std::string _startupNoticeMessage;
     uint32 _startupNoticeDelaySeconds = 5;
@@ -142,6 +159,24 @@ namespace
             out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
 
         return out;
+    }
+
+    // Reads a config option as a money amount: a g/s/c string ("100g", "50g 30s")
+    // like the .send money command, or a bare number of copper. Returns 0 for a
+    // non-positive or unparseable value.
+    uint32 ParseMoneyOption(std::string const& name)
+    {
+        std::string const raw = ToLowerAscii(sConfigMgr->GetOption<std::string>(name, "0"));
+        Optional<int32> const parsed = raw.find_first_of("gsc") != std::string::npos
+            ? MoneyStringToMoney(raw)
+            : Acore::StringTo<int32>(raw);
+        if (!parsed)
+        {
+            LOG_WARN("module.enhancedsupport", "Could not parse {} = \"{}\"; treating as 0.", name, raw);
+            return 0;
+        }
+
+        return *parsed > 0 ? static_cast<uint32>(*parsed) : 0;
     }
 
     // Folds common leetspeak/look-alike substitutions back to letters so that
@@ -464,6 +499,38 @@ namespace
                 break;
         }
     }
+
+    // True when the auction filter is configured to flag anything at all.
+    bool AuctionFilterActive()
+    {
+        return _auctionFilterMaxQuality >= 0 || _auctionFilterAlwaysLogGrey || _auctionFilterGreyMinPriceCopper != 0;
+    }
+
+    // True when an auction of `proto` at `price` should be flagged. Grey items are
+    // checked against their own rules first (the always-on switch and the grey-specific
+    // price), then any item is checked against the general MaxQuality / MinPrice.
+    bool IsSuspiciousAuction(ItemTemplate const* proto, uint32 price)
+    {
+        if (!proto)
+            return false;
+
+        if (proto->Quality == ITEM_QUALITY_POOR)
+        {
+            if (_auctionFilterAlwaysLogGrey)
+                return true;
+
+            if (_auctionFilterGreyMinPriceCopper != 0 && price >= _auctionFilterGreyMinPriceCopper)
+                return true;
+        }
+
+        if (_auctionFilterMaxQuality < 0)
+            return false;
+
+        if (static_cast<int32>(proto->Quality) > _auctionFilterMaxQuality)
+            return false;
+
+        return price >= _auctionFilterMinPriceCopper;
+    }
 }
 
 namespace EnhancedSupport
@@ -645,6 +712,31 @@ namespace EnhancedSupport
         return _lootBatchSeconds;
     }
 
+    int32 GetAuctionFilterMaxQuality()
+    {
+        return _auctionFilterMaxQuality;
+    }
+
+    uint32 GetAuctionFilterMinPrice()
+    {
+        return _auctionFilterMinPriceCopper;
+    }
+
+    bool GetAuctionFilterAlwaysLogGrey()
+    {
+        return _auctionFilterAlwaysLogGrey;
+    }
+
+    uint32 GetAuctionFilterGreyMinPrice()
+    {
+        return _auctionFilterGreyMinPriceCopper;
+    }
+
+    bool GetAuctionFilterOnListing()
+    {
+        return _auctionFilterOnListing;
+    }
+
     std::string FormatMoney(uint32 copper)
     {
         return Acore::StringFormat("{}g {}s {}c", copper / GOLD, (copper % GOLD) / SILVER, copper % SILVER);
@@ -692,6 +784,12 @@ namespace EnhancedSupport
         _lootFilterLevelGap = sConfigMgr->GetOption<uint32>("EnhancedSupport.LootFilter.LevelGap", 0);
         _lootFilterMaxLevel = sConfigMgr->GetOption<uint8>("EnhancedSupport.LootFilter.MaxLevel", 0);
         _lootBatchSeconds = sConfigMgr->GetOption<uint32>("EnhancedSupport.LootFilter.BatchSeconds", 0);
+
+        _auctionFilterMaxQuality = sConfigMgr->GetOption<int32>("EnhancedSupport.AuctionFilter.MaxQuality", -1);
+        _auctionFilterAlwaysLogGrey = sConfigMgr->GetOption<bool>("EnhancedSupport.AuctionFilter.AlwaysLogGrey", false);
+        _auctionFilterOnListing = sConfigMgr->GetOption<bool>("EnhancedSupport.AuctionFilter.OnListing", false);
+        _auctionFilterMinPriceCopper = ParseMoneyOption("EnhancedSupport.AuctionFilter.MinPrice");
+        _auctionFilterGreyMinPriceCopper = ParseMoneyOption("EnhancedSupport.AuctionFilter.GreyMinPrice");
 
         _startupNoticeEnabled = sConfigMgr->GetOption<bool>("EnhancedSupport.StartupNotice.Enable", false);
         _startupNoticeMessage = sConfigMgr->GetOption<std::string>("EnhancedSupport.StartupNotice.Message", "Server restarted!");
@@ -1273,6 +1371,128 @@ public:
     }
 };
 
+// Logs (without blocking) auctions of low-quality items put up for an unreasonable
+// price - a way to move value between characters dressed up as a normal sale. Flags
+// completed sales (where both parties and the paid price are known) and, optionally,
+// the listings themselves.
+class EnhancedSupportAuctionFilter : public AuctionHouseScript
+{
+public:
+    EnhancedSupportAuctionFilter() : AuctionHouseScript("EnhancedSupportAuctionFilter", {
+        AUCTIONHOUSEHOOK_ON_AUCTION_ADD,
+        AUCTIONHOUSEHOOK_ON_AUCTION_SUCCESSFUL
+    }) { }
+
+    void OnAuctionAdd(AuctionHouseObject* /*ah*/, AuctionEntry* entry) override
+    {
+        if (!_enabled || !_auctionFilterOnListing || !AuctionFilterActive() || !entry)
+            return;
+
+        ItemTemplate const* proto = sObjectMgr->GetItemTemplate(entry->item_template);
+
+        // Asking price is the buyout when set, otherwise the starting bid.
+        uint32 const price = entry->buyout ? entry->buyout : entry->startbid;
+        if (!IsSuspiciousAuction(proto, price))
+            return;
+
+        Report("listing", proto, entry->item_template, entry->itemCount, price, entry->owner, ObjectGuid::Empty);
+    }
+
+    void OnAuctionSuccessful(AuctionHouseObject* /*ah*/, AuctionEntry* entry) override
+    {
+        if (!_enabled || !AuctionFilterActive() || !entry)
+            return;
+
+        ItemTemplate const* proto = sObjectMgr->GetItemTemplate(entry->item_template);
+
+        // On a completed sale (buyout or won bid) entry->bid holds the price paid.
+        if (!IsSuspiciousAuction(proto, entry->bid))
+            return;
+
+        Report("sale", proto, entry->item_template, entry->itemCount, entry->bid, entry->owner, entry->bidder);
+    }
+
+private:
+    struct PartyInfo
+    {
+        std::string name;
+        uint32 account = 0;
+        std::string ip;  // resolvable only while the character is online
+    };
+
+    static PartyInfo ResolveParty(ObjectGuid guid)
+    {
+        PartyInfo info;
+        if (!sCharacterCache->GetCharacterNameByGuid(guid, info.name) || info.name.empty())
+            info.name = "Unknown";
+
+        info.account = sCharacterCache->GetCharacterAccountIdByGuid(guid);
+
+        if (Player* player = ObjectAccessor::FindPlayer(guid))
+            info.ip = player->GetSession()->GetRemoteAddress();
+        else
+            info.ip = "offline";
+
+        return info;
+    }
+
+    static char const* QualityName(uint32 quality)
+    {
+        switch (quality)
+        {
+            case ITEM_QUALITY_POOR:     return "grey";
+            case ITEM_QUALITY_NORMAL:   return "white";
+            case ITEM_QUALITY_UNCOMMON: return "green";
+            case ITEM_QUALITY_RARE:     return "blue";
+            case ITEM_QUALITY_EPIC:     return "purple";
+            default:                    return "other";
+        }
+    }
+
+    static void Report(char const* event, ItemTemplate const* proto, uint32 itemId, uint32 count,
+        uint32 price, ObjectGuid seller, ObjectGuid buyer)
+    {
+        std::string const itemName = proto ? proto->Name1 : "Unknown";
+        uint32 const quality = proto ? proto->Quality : 0;
+        uint32 const vendorValue = proto ? proto->SellPrice * count : 0;
+
+        PartyInfo const sellerInfo = ResolveParty(seller);
+
+        std::string buyerLog = "n/a";
+        if (buyer)
+        {
+            PartyInfo const buyerInfo = ResolveParty(buyer);
+            buyerLog = Acore::StringFormat("{} ({}, account {}, IP {})",
+                buyerInfo.name, buyer.GetCounter(), buyerInfo.account, buyerInfo.ip);
+        }
+
+        LOG_INFO("module.enhancedsupport",
+            "AuctionFilter: suspicious {} - {}x [{}] (id {}, {}) for {} (vendor value {}) | Seller: {} ({}, account {}, IP {}) | Buyer: {}",
+            event, count, itemName, itemId, QualityName(quality),
+            EnhancedSupport::FormatMoney(price), EnhancedSupport::FormatMoney(vendorValue),
+            sellerInfo.name, seller.GetCounter(), sellerInfo.account, sellerInfo.ip, buyerLog);
+
+#ifdef HAS_CHAT_TRANSMITTER
+        std::string note = Acore::StringFormat(
+            "🪙 **Suspicious auction ({})** — {} (vendor value {})\n"
+            "🏷️ Item: [{}](https://wowgaming.altervista.org/aowow/?item={}) (id {}, {}) x{}\n"
+            "👤 Seller: **{}** (GUID {}, account {}, IP {})",
+            event, EnhancedSupport::FormatMoney(price), EnhancedSupport::FormatMoney(vendorValue),
+            itemName, itemId, itemId, QualityName(quality), count,
+            sellerInfo.name, seller.GetCounter(), sellerInfo.account, sellerInfo.ip);
+
+        if (buyer)
+        {
+            PartyInfo const buyerInfo = ResolveParty(buyer);
+            note += Acore::StringFormat("\n🛒 Buyer: **{}** (GUID {}, account {}, IP {})",
+                buyerInfo.name, buyer.GetCounter(), buyerInfo.account, buyerInfo.ip);
+        }
+
+        sChatTransmitter->QueueNotification("AuctionFilter", note);
+#endif
+    }
+};
+
 void AddEnhancedSupportScripts()
 {
     new EnhancedSupportWorldScript();
@@ -1280,4 +1500,5 @@ void AddEnhancedSupportScripts()
     new EnhancedSupportChatFilter();
     new EnhancedSupportLootFilter();
     new EnhancedSupportInviteFilter();
+    new EnhancedSupportAuctionFilter();
 }

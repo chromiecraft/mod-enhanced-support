@@ -78,6 +78,17 @@ namespace EnhancedSupport
     // sent; 0 sends one notification per item (no batching).
     uint32 GetLootBatchSeconds();
 
+    // Auction filter: highest item quality flagged (0 grey, 1 white, ...; < 0 disables
+    // the check), the price (copper) at/above which a match is flagged, whether every
+    // grey item is flagged regardless of price, the grey-specific price (copper) at/above
+    // which grey items are flagged (0 = off), and whether listings are flagged too or
+    // only completed sales.
+    int32 GetAuctionFilterMaxQuality();
+    uint32 GetAuctionFilterMinPrice();
+    bool GetAuctionFilterAlwaysLogGrey();
+    uint32 GetAuctionFilterGreyMinPrice();
+    bool GetAuctionFilterOnListing();
+
     // Formats a copper amount as a "Xg Ys Zc" string.
     std::string FormatMoney(uint32 copper);
 

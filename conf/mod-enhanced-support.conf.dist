@@ -242,6 +242,76 @@ EnhancedSupport.LootFilter.MaxLevel = 0
 EnhancedSupport.LootFilter.BatchSeconds = 0
 
 #
+#    EnhancedSupport.AuctionFilter.MaxQuality
+#        Description: Log (and relay to Discord, if mod-chat-transmitter is available) auction
+#                     house activity involving low-quality items put up for an unreasonable price,
+#                     to surface value being moved between characters under the guise of a normal
+#                     sale. An auction is flagged when the item's quality is at or below this value
+#                     AND its price is at or above AuctionFilter.MinPrice below. Log-only: the
+#                     auction is never blocked. Also gated by EnhancedSupport.Enable.
+#                     This is the master switch for the auction filter.
+#        Default:     -1 - Disabled (no auction check)
+#                      0 - Flag grey (poor) items only
+#                      1 - Flag grey and white (common) items
+#                      2 - Also include green (uncommon) items
+#
+
+EnhancedSupport.AuctionFilter.MaxQuality = -1
+
+#
+#    EnhancedSupport.AuctionFilter.MinPrice
+#        Description: Price at or above which a low-quality auction (see MaxQuality) is flagged.
+#                     For example, with MaxQuality = 0 and MinPrice = "1000g", a grey item listed
+#                     or sold for 1000g or more is logged. Accepts a gold/silver/copper string
+#                     like the .send money command, e.g. "1000g", "500g 50s". A bare number is
+#                     copper. Has no effect unless AuctionFilter.MaxQuality is set (>= 0).
+#        Default:     "0" - Flag at any price (every low-quality auction)
+#
+
+EnhancedSupport.AuctionFilter.MinPrice = "0"
+
+#
+#    EnhancedSupport.AuctionFilter.AlwaysLogGrey
+#        Description: Log every grey (poor) quality item auction regardless of price, independent
+#                     of the MaxQuality / MinPrice settings above. Use this for a blanket audit of
+#                     grey-item auctions on top of (or instead of) the price-threshold filter. It
+#                     works even when AuctionFilter.MaxQuality is disabled (-1). Respects the
+#                     AuctionFilter.OnListing setting below. Log-only; gated by EnhancedSupport.Enable.
+#        Default:     0 - Off (grey items follow the MaxQuality / MinPrice rules like any other)
+#                     1 - Always log grey-item auctions
+#
+
+EnhancedSupport.AuctionFilter.AlwaysLogGrey = 0
+
+#
+#    EnhancedSupport.AuctionFilter.GreyMinPrice
+#        Description: Grey-specific price threshold: log grey (poor) quality item auctions whose
+#                     price is at or above this, independent of the general MaxQuality / MinPrice
+#                     settings. Use this to watch grey items at a different (usually lower) price
+#                     than other qualities. Works even when AuctionFilter.MaxQuality is disabled
+#                     (-1). Has no effect if AuctionFilter.AlwaysLogGrey is on (that already logs
+#                     every grey item). Accepts a gold/silver/copper string like the .send money
+#                     command, e.g. "1000g", "500g 50s"; a bare number is copper. Respects the
+#                     AuctionFilter.OnListing setting. Log-only; gated by EnhancedSupport.Enable.
+#        Default:     "0" - Off (grey items follow the MaxQuality / MinPrice rules)
+#
+
+EnhancedSupport.AuctionFilter.GreyMinPrice = "0"
+
+#
+#    EnhancedSupport.AuctionFilter.OnListing
+#        Description: By default only completed sales are flagged (that is where value actually
+#                     changes hands, and both seller and buyer are known). Enable this to also
+#                     flag the suspicious listing when it is first posted, as an early warning -
+#                     at listing time the buyer is not yet known. Has no effect unless
+#                     AuctionFilter.MaxQuality is set (>= 0).
+#        Default:     0 - Flag completed sales only
+#                     1 - Also flag suspicious listings when posted
+#
+
+EnhancedSupport.AuctionFilter.OnListing = 0
+
+#
 #    EnhancedSupport.StartupNotice.Enable
 #        Description: Post a Discord notice when the world server has started, showing the
 #                     git revision the server is running. Requires mod-chat-transmitter to
