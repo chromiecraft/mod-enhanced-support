@@ -326,6 +326,25 @@ EnhancedSupport.AuctionFilter.OnListing = 0
 EnhancedSupport.AuctionFilter.BatchSeconds = 0
 
 #
+#    EnhancedSupport.EmailFilter.Enable
+#        Description: Log (and relay to Discord, if mod-chat-transmitter is available) when a
+#                     newly created character belongs to an account whose email contains a
+#                     configured substring pattern - surfaces bot/gold-seller accounts that
+#                     register with recognizable email patterns. Log-only: character creation is
+#                     never blocked. Also gated by EnhancedSupport.Enable. The patterns are not
+#                     stored here; manage them in-game or from the console with:
+#                       .support emailpattern add <pattern>
+#                       .support emailpattern remove <pattern>
+#                       .support list emailpatterns
+#                     The check only does anything once at least one pattern is configured.
+#                     Matching is case-insensitive substring against the account email.
+#        Default:     1 - Enabled (runs whenever a pattern is configured)
+#                     0 - Disabled (the email check never runs, patterns are kept)
+#
+
+EnhancedSupport.EmailFilter.Enable = 1
+
+#
 #    EnhancedSupport.StartupNotice.Enable
 #        Description: Post a Discord notice when the world server has started, showing the
 #                     git revision the server is running. Requires mod-chat-transmitter to

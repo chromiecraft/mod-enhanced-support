@@ -43,6 +43,7 @@ namespace EnhancedSupport
     // Stored and matched like keywords (trimmed, lowercased, case-insensitive substring).
     void LoadEmailPatterns();
     std::vector<std::string> const& GetEmailPatterns();
+    bool GetEmailFilterEnabled();
     bool HasEmailPattern(std::string const& normalized);
     void AddEmailPattern(std::string const& normalized);
     void RemoveEmailPattern(std::string const& normalized);

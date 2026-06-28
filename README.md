@@ -160,8 +160,8 @@ account and the matched pattern.
 
 Patterns live in the auth DB table `enhanced_support_email_patterns`, managed with
 the `.support emailpattern` commands below and shared across all realms, like the
-mail keywords. The check runs whenever at least one pattern is configured, so there
-is no separate config option to enable it.
+mail keywords. `EnhancedSupport.EmailFilter.Enable` is a master switch for the check
+(default on); when enabled it runs only once at least one pattern is configured.
 
 ### Startup Discord notice
 
@@ -203,6 +203,7 @@ Examples: `.support keyword add wowgold`, `.support list keywords`,
 | `EnhancedSupport.MailFilter.BanAuthor`| `SupportModule` | Author recorded on Action 3/4 bans; also the default `.support list bans` search term |
 | `EnhancedSupport.LootFilter.LevelGap` | `0`      | Log loot whose required level exceeds the looter's level by at least this gap; `0` disables |
 | `EnhancedSupport.LootFilter.MaxLevel` | `0`      | Cap the loot check to looters at or below this level; `0` applies to all levels |
+| `EnhancedSupport.EmailFilter.Enable` | `1`       | Master switch for the account email-pattern check at character creation; runs once at least one pattern is configured |
 | `EnhancedSupport.StartupNotice.Enable` | `0`     | Post a Discord notice with the git revision on server start (needs mod-chat-transmitter) |
 | `EnhancedSupport.StartupNotice.Message`| `Server restarted!` | Headline for the startup notice; the full version line is shown below it in a code block |
 | `EnhancedSupport.StartupNotice.DelaySeconds`| `5`  | Seconds to wait after startup before sending, so the relay's WebSocket is up |

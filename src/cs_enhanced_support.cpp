@@ -98,7 +98,9 @@ public:
                 windowSize, windowSeconds, static_cast<uint32>(aggressiveMaxLevel));
 
         handler->PSendSysMessage("  Keywords loaded: {}", EnhancedSupport::GetKeywords().size());
-        handler->PSendSysMessage("  Email patterns loaded: {}", EnhancedSupport::GetEmailPatterns().size());
+        handler->PSendSysMessage("  Email filter: {} ({} pattern(s) loaded)",
+            EnhancedSupport::GetEmailFilterEnabled() ? "enabled" : "disabled",
+            EnhancedSupport::GetEmailPatterns().size());
 
         uint8 const inviteAction = EnhancedSupport::GetInviteFilterAction();
         uint32 const inviteCount = EnhancedSupport::GetInviteRateCount();

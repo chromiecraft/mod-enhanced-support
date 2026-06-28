@@ -87,6 +87,10 @@ namespace
     // recognizable email patterns. Stored lowercased, like the mail keywords.
     std::vector<std::string> _emailPatterns;
 
+    // Master switch for the email-pattern check. Defaults on, so the check is governed
+    // by the pattern list unless explicitly disabled here.
+    bool _emailFilterEnabled = true;
+
     // When set, mail between two characters on the same account (sending to your
     // own alt) skips the keyword and high-value checks entirely.
     bool _mailSkipSameAccount = false;
@@ -744,6 +748,11 @@ namespace EnhancedSupport
         return _emailPatterns;
     }
 
+    bool GetEmailFilterEnabled()
+    {
+        return _emailFilterEnabled;
+    }
+
     bool HasEmailPattern(std::string const& normalized)
     {
         return std::find(_emailPatterns.begin(), _emailPatterns.end(), normalized) != _emailPatterns.end();
@@ -971,6 +980,8 @@ namespace EnhancedSupport
         _auctionFilterOnListing = sConfigMgr->GetOption<bool>("EnhancedSupport.AuctionFilter.OnListing", false);
         _auctionFilterMinPriceCopper = ParseMoneyOption("EnhancedSupport.AuctionFilter.MinPrice");
         _auctionFilterGreyMinPriceCopper = ParseMoneyOption("EnhancedSupport.AuctionFilter.GreyMinPrice");
+
+        _emailFilterEnabled = sConfigMgr->GetOption<bool>("EnhancedSupport.EmailFilter.Enable", true);
         _auctionBatchSeconds = sConfigMgr->GetOption<uint32>("EnhancedSupport.AuctionFilter.BatchSeconds", 0);
 
         _startupNoticeEnabled = sConfigMgr->GetOption<bool>("EnhancedSupport.StartupNotice.Enable", false);
@@ -1669,7 +1680,7 @@ public:
 
     void OnPlayerCreate(Player* player) override
     {
-        if (!_enabled || _emailPatterns.empty())
+        if (!_enabled || !_emailFilterEnabled || _emailPatterns.empty())
             return;
 
         uint32 const accountId = player->GetSession()->GetAccountId();
