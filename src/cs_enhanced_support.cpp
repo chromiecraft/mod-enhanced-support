@@ -127,6 +127,29 @@ public:
         {
             handler->PSendSysMessage("  Loot filter level gap: {}", lootLevelGap);
 
+            uint32 const lootSources = EnhancedSupport::GetLootFilterSources();
+            if (lootSources == 0)
+                handler->SendSysMessage("  Loot filter sources: all");
+            else
+            {
+                std::string names;
+                auto const append = [&names](uint32 mask, uint32 bit, char const* name)
+                {
+                    if (mask & bit)
+                    {
+                        if (!names.empty())
+                            names += ", ";
+                        names += name;
+                    }
+                };
+                append(lootSources, 1, "creature");
+                append(lootSources, 2, "gameobject");
+                append(lootSources, 4, "container");
+                append(lootSources, 8, "corpse");
+                append(lootSources, 16, "player");
+                handler->PSendSysMessage("  Loot filter sources: {}", names.empty() ? "none" : names);
+            }
+
             uint8 const lootMaxLevel = EnhancedSupport::GetLootFilterMaxLevel();
             if (lootMaxLevel == 0)
                 handler->SendSysMessage("  Loot filter max level: no cap (all levels)");

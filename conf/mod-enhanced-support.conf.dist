@@ -216,6 +216,23 @@ EnhancedSupport.GoldFilter.Threshold = "0"
 EnhancedSupport.LootFilter.LevelGap = 0
 
 #
+#    EnhancedSupport.LootFilter.Sources
+#        Description: Restrict the loot level-gap check (above) to loot pulled from specific
+#                     source types. A bitmask - add the values of the sources you want to watch:
+#                         1  - creature (mob corpse loot)
+#                         2  - gameobject (world chests, nodes, etc.)
+#                         4  - container (a lootable item in the looter's bags)
+#                         8  - corpse (player corpse)
+#                         16 - player (pickpocket, etc.)
+#                     Combine them by adding: e.g. 3 = creature + gameobject, 7 = creature +
+#                     gameobject + container. Has no effect unless
+#                     EnhancedSupport.LootFilter.LevelGap is enabled.
+#        Default:     0 - Watch every source (no restriction)
+#
+
+EnhancedSupport.LootFilter.Sources = 0
+
+#
 #    EnhancedSupport.LootFilter.MaxLevel
 #        Description: Restrict the loot level-gap check (above) to looters at or below this
 #                     level, so it only watches low-level characters. For example, 10 logs

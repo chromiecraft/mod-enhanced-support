@@ -127,10 +127,25 @@ namespace
     // to Discord). 0 disables the check. Parsed from a g/s/c money string.
     uint32 _goldFilterThresholdCopper = 0;
 
+    // Which loot sources the loot level-gap check watches. A bitmask of the
+    // LootSourceFlag bits below; set bits combine. 0 watches every source.
+    enum LootSourceFlag : uint32
+    {
+        LOOT_SOURCE_CREATURE   = 0x01,
+        LOOT_SOURCE_GAMEOBJECT = 0x02,
+        LOOT_SOURCE_CONTAINER  = 0x04,
+        LOOT_SOURCE_CORPSE     = 0x08,
+        LOOT_SOURCE_PLAYER     = 0x10,
+    };
+
     // Looting an item whose RequiredLevel exceeds the looter's level by at least
     // this many levels is logged (and relayed to Discord). 0 disables the check.
     // Surfaces low-level characters pulling high-level gear from world chests etc.
     uint32 _lootFilterLevelGap = 0;
+
+    // Bitmask of LootSourceFlag values restricting which loot sources the check
+    // watches. 0 watches every source (including sources of an unrecognised type).
+    uint32 _lootFilterSources = 0;
 
     // Restricts the loot check to looters at or below this level. 0 means no cap
     // (applies to every level). Lets the check target only low-level characters.
@@ -887,6 +902,11 @@ namespace EnhancedSupport
         return _lootFilterLevelGap;
     }
 
+    uint32 GetLootFilterSources()
+    {
+        return _lootFilterSources;
+    }
+
     uint8 GetLootFilterMaxLevel()
     {
         return _lootFilterMaxLevel;
@@ -972,6 +992,7 @@ namespace EnhancedSupport
             _goldFilterThresholdCopper = *parsed > 0 ? static_cast<uint32>(*parsed) : 0;
 
         _lootFilterLevelGap = sConfigMgr->GetOption<uint32>("EnhancedSupport.LootFilter.LevelGap", 0);
+        _lootFilterSources = sConfigMgr->GetOption<uint32>("EnhancedSupport.LootFilter.Sources", 0);
         _lootFilterMaxLevel = sConfigMgr->GetOption<uint8>("EnhancedSupport.LootFilter.MaxLevel", 0);
         _lootBatchSeconds = sConfigMgr->GetOption<uint32>("EnhancedSupport.LootFilter.BatchSeconds", 0);
 
@@ -1345,6 +1366,10 @@ public:
         if (src.isFishing)
             return;
 
+        // Restrict to the configured loot sources (0 = watch every source).
+        if (_lootFilterSources != 0 && !(src.typeFlag & _lootFilterSources))
+            return;
+
         std::string const location = ResolveLocation(player);
         bool const inGroup = player->GetGroup() != nullptr;
 
@@ -1393,6 +1418,7 @@ private:
         std::string name;                // creature/object/container name; empty if unresolved
         uint32 entry = 0;                // template entry (item id for a container); 0 if unresolved
         ObjectGuid::LowType spawnId = 0; // DB spawn id; 0 for items and temporary objects
+        uint32 typeFlag = 0;             // matching LootSourceFlag; 0 for an unrecognised source
         bool isCreature = false;
         bool isGameObject = false;
         bool isItem = false;             // a container item in the looter's bags
@@ -1410,6 +1436,7 @@ private:
         if (lootguid.IsGameObject())
         {
             src.isGameObject = true;
+            src.typeFlag = LOOT_SOURCE_GAMEOBJECT;
             src.label = "object/chest";
             if (GameObject* go = map->GetGameObject(lootguid))
             {
@@ -1423,6 +1450,7 @@ private:
         else if (lootguid.IsCreature())
         {
             src.isCreature = true;
+            src.typeFlag = LOOT_SOURCE_CREATURE;
             src.label = "creature";
             if (Creature* creature = map->GetCreature(lootguid))
             {
@@ -1434,6 +1462,7 @@ private:
         else if (lootguid.IsItem())
         {
             src.isItem = true;
+            src.typeFlag = LOOT_SOURCE_CONTAINER;
             src.label = "container";
             // A container is an item in the looter's own bags, not a world object.
             if (Item* container = player->GetItemByGuid(lootguid))
@@ -1444,9 +1473,15 @@ private:
             }
         }
         else if (lootguid.IsCorpse())
+        {
+            src.typeFlag = LOOT_SOURCE_CORPSE;
             src.label = "corpse";
+        }
         else if (lootguid.IsPlayer())
+        {
+            src.typeFlag = LOOT_SOURCE_PLAYER;
             src.label = "player";
+        }
 
         return src;
     }

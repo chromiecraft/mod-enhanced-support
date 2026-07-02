@@ -80,6 +80,10 @@ namespace EnhancedSupport
     // which the loot is logged; 0 disables the check.
     uint32 GetLootFilterLevelGap();
 
+    // Bitmask of loot sources the check watches (1 creature, 2 gameobject, 4 container,
+    // 8 corpse, 16 player); 0 watches every source.
+    uint32 GetLootFilterSources();
+
     // Highest looter level the loot check applies to; 0 means no cap (all levels).
     uint8 GetLootFilterMaxLevel();
 
