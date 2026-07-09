@@ -16,9 +16,11 @@
  */
 
 #include "EnhancedSupport.h"
+#include "CharacterCache.h"
 #include "Chat.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
+#include "ObjectGuid.h"
 #include "ScriptMgr.h"
 #include "StringFormat.h"
 #include "Timer.h"
@@ -53,6 +55,12 @@ public:
             { "remove", HandleEmailPatternRemoveCommand, SEC_ADMINISTRATOR, Console::Yes },
         };
 
+        static ChatCommandTable arenaTable =
+        {
+            { "matches", HandleArenaMatchesCommand, SEC_GAMEMASTER, Console::Yes },
+            { "check",   HandleArenaCheckCommand,   SEC_GAMEMASTER, Console::Yes },
+        };
+
         static ChatCommandTable supportTable =
         {
             { "info",         HandleInfoCommand,   SEC_GAMEMASTER,    Console::Yes },
@@ -61,6 +69,7 @@ public:
             { "list",         listTable },
             { "keyword",      keywordTable },
             { "emailpattern", emailPatternTable },
+            { "arena",        arenaTable },
         };
 
         static ChatCommandTable commandTable =
@@ -200,6 +209,14 @@ public:
                 EnhancedSupport::GetArenaTelemetryRatedOnly() ? "rated matches only" : "all arena matches",
                 sampleMs == 0 ? "off" : Acore::StringFormat("every {}ms", sampleMs),
                 retentionDays == 0 ? "unlimited" : Acore::StringFormat("{} day(s)", retentionDays));
+
+            if (!EnhancedSupport::GetArenaTelemetryAutoCheck())
+                handler->SendSysMessage("  Arena auto-check: off");
+            else
+                handler->PSendSysMessage("  Arena auto-check: on (fast <= {}ms, flag at >= {} fast reactions and >= {}%)",
+                    EnhancedSupport::GetArenaTelemetrySuspectReactionMs(),
+                    EnhancedSupport::GetArenaTelemetrySuspectMinEvents(),
+                    EnhancedSupport::GetArenaTelemetrySuspectPercent());
         }
 
         handler->PSendSysMessage("  Ban author: {}", EnhancedSupport::GetBanAuthor());
@@ -352,6 +369,92 @@ public:
 
         EnhancedSupport::RemoveEmailPattern(normalized);
         handler->PSendSysMessage("Removed email pattern: {}", normalized);
+        return true;
+    }
+
+    // Lists the most recently recorded arena matches, newest first, so a GM can
+    // find the match id to feed into ".support arena check".
+    static bool HandleArenaMatchesCommand(ChatHandler* handler, Optional<uint32> count)
+    {
+        uint32 const limit = std::clamp<uint32>(count.value_or(10), 1, 50);
+
+        QueryResult result = CharacterDatabase.Query(
+            "SELECT match_id, MIN(time_ms), MAX(time_ms), COUNT(*), MAX(arena_type), MAX(rated) "
+            "FROM enhanced_support_arena_events GROUP BY match_id ORDER BY MAX(time_ms) DESC LIMIT {}", limit);
+
+        if (!result)
+        {
+            handler->SendSysMessage("No recorded arena matches found.");
+            return true;
+        }
+
+        handler->SendSysMessage("Recorded arena matches (newest first):");
+        do
+        {
+            Field* fields = result->Fetch();
+            uint32 const matchId = fields[0].Get<uint32>();
+            uint64 const firstMs = fields[1].Get<uint64>();
+            uint64 const lastMs = fields[2].Get<uint64>();
+            uint64 const events = fields[3].Get<uint64>();
+            uint32 const arenaType = fields[4].Get<uint8>();
+            bool const rated = fields[5].Get<uint8>() != 0;
+
+            uint64 const durationSec = (lastMs - firstMs) / 1000;
+            handler->PSendSysMessage("  match {} | {}v{}{} | {} | {}m {}s | {} event(s)",
+                matchId, arenaType, arenaType, rated ? " rated" : "",
+                Acore::Time::TimeToTimestampStr(Seconds(firstMs / 1000)),
+                durationSec / 60, durationSec % 60, events);
+        } while (result->NextRow());
+
+        return true;
+    }
+
+    // Analyzes one recorded match (running matches are analyzed from the live
+    // buffer) and prints per-player reaction statistics.
+    static bool HandleArenaCheckCommand(ChatHandler* handler, uint32 matchId)
+    {
+        std::vector<EnhancedSupport::ArenaTelemetryPlayerReport> reports = EnhancedSupport::CheckArenaMatch(matchId);
+        if (reports.empty())
+        {
+            handler->PSendSysMessage("No telemetry recorded for match {}.", matchId);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        std::sort(reports.begin(), reports.end(),
+            [](EnhancedSupport::ArenaTelemetryPlayerReport const& a, EnhancedSupport::ArenaTelemetryPlayerReport const& b)
+            {
+                return a.team != b.team ? a.team < b.team : a.guidLow < b.guidLow;
+            });
+
+        handler->PSendSysMessage(
+            "Match {} telemetry ({} player(s)). Fast = reaction <= {}ms after subtracting latency; "
+            "flagged at >= {} fast reactions making up >= {}%:",
+            matchId, reports.size(), EnhancedSupport::GetArenaTelemetrySuspectReactionMs(),
+            EnhancedSupport::GetArenaTelemetrySuspectMinEvents(), EnhancedSupport::GetArenaTelemetrySuspectPercent());
+
+        auto const reactionBlock = [](uint32 total, uint32 fast, int32 minMs, int32 medianMs) -> std::string
+        {
+            if (total == 0)
+                return "none";
+            return Acore::StringFormat("{} (fast {}, min {}ms, median {}ms)", total, fast, minMs, medianMs);
+        };
+
+        for (EnhancedSupport::ArenaTelemetryPlayerReport const& report : reports)
+        {
+            std::string name;
+            if (!sCharacterCache->GetCharacterNameByGuid(ObjectGuid(HighGuid::Player, report.guidLow), name) || name.empty())
+                name = "Unknown";
+
+            handler->PSendSysMessage("  [team {}] {} (GUID {}): interrupts {} | dispels {} | jukes thrown {}, bitten {} | latency ~{}ms{}",
+                report.team, name, report.guidLow,
+                reactionBlock(report.interrupts, report.fastInterrupts, report.minInterruptMs, report.medianInterruptMs),
+                reactionBlock(report.dispels, report.fastDispels, report.minDispelMs, report.medianDispelMs),
+                report.fakeCasts, report.fakeCastBites, report.avgLatencyMs,
+                report.suspicious ? "  << SUSPICIOUS" : "");
+        }
+
+        handler->SendSysMessage("Verdicts need several matches, not one: compare with this player's other matches before acting.");
         return true;
     }
 

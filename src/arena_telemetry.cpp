@@ -17,6 +17,7 @@
 
 #include "EnhancedSupport.h"
 #include "Battleground.h"
+#include "CharacterCache.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
 #include "GameTime.h"
@@ -27,6 +28,7 @@
 #include "Spell.h"
 #include "SpellAuras.h"
 #include "SpellInfo.h"
+#include "SpellMgr.h"
 #include "StringFormat.h"
 #include "WorldSession.h"
 
@@ -35,6 +37,12 @@
 #include <mutex>
 #include <unordered_map>
 #include <vector>
+
+// Optional integration: relay auto-check alerts to Discord via mod-chat-transmitter.
+#if __has_include("mod-chat-transmitter/src/ChatTransmitter.h")
+#include "mod-chat-transmitter/src/ChatTransmitter.h"
+#define HAS_CHAT_TRANSMITTER 1
+#endif
 
 // Arena telemetry: records raw combat events from live arena matches into the
 // characters DB (enhanced_support_arena_events) for offline cheat detection -
@@ -63,6 +71,16 @@ namespace
     bool _telemetryRatedOnly = true;
     uint32 _telemetryPositionSampleMs = 500;
     uint32 _telemetryRetentionDays = 30;
+
+    // Auto-check: analyze each recorded match when it ends and report players
+    // whose reaction profile crosses the thresholds below. A reaction is "fast"
+    // when it is at or below SuspectReactionMs after subtracting the player's
+    // latency; a player is flagged when they have at least SuspectMinEvents
+    // fast reactions making up at least SuspectPercent of their reactions.
+    bool _telemetryAutoCheck = false;
+    uint32 _suspectReactionMs = 180;
+    uint32 _suspectMinEvents = 4;
+    uint32 _suspectPercent = 60;
 
     // One buffered row of enhanced_support_arena_events (all-numeric).
     struct ArenaEventRow
@@ -173,22 +191,22 @@ namespace
             rows.size(), matchId);
     }
 
-    // Takes a match's buffer out (if any) and flushes it. Safe to call more than
-    // once per match; later calls find nothing.
+    // Takes a match's buffer out (empty when already taken by an earlier hook).
+    std::vector<ArenaEventRow> TakeMatch(uint32 matchId)
+    {
+        std::lock_guard<std::mutex> guard(_matchesLock);
+        auto it = _matchBuffers.find(matchId);
+        if (it == _matchBuffers.end())
+            return {};
+
+        std::vector<ArenaEventRow> rows = std::move(it->second);
+        _matchBuffers.erase(it);
+        return rows;
+    }
+
     void FlushMatch(uint32 matchId)
     {
-        std::vector<ArenaEventRow> rows;
-        {
-            std::lock_guard<std::mutex> guard(_matchesLock);
-            auto it = _matchBuffers.find(matchId);
-            if (it == _matchBuffers.end())
-                return;
-
-            rows = std::move(it->second);
-            _matchBuffers.erase(it);
-        }
-
-        FlushRows(matchId, rows);
+        FlushRows(matchId, TakeMatch(matchId));
     }
 
     void FlushAllMatches()
@@ -234,6 +252,238 @@ namespace
         if (overflow)
             FlushMatch(matchId);
     }
+
+    // ---- Match analysis ----
+    //
+    // Responses are classified by spell effect, so no spell list is maintained:
+    // anything with SPELL_EFFECT_INTERRUPT_CAST counts as an interrupt, anything
+    // with SPELL_EFFECT_DISPEL as a dispel. Reactions are server-observed and
+    // reduced by the actor's latency at the response, approximating the player's
+    // own reaction time. The matching is heuristic (nearest preceding stimulus),
+    // which is plenty for flagging: verdicts come from the distribution, not
+    // from any single event.
+
+    int32 AdjustedReactionMs(uint64 stimulusMs, uint64 responseMs, uint32 latencyMs)
+    {
+        int64 const raw = static_cast<int64>(responseMs - stimulusMs) - static_cast<int64>(latencyMs);
+        return static_cast<int32>(std::max<int64>(raw, 0));
+    }
+
+    // Sorts in place; -1 when empty.
+    int32 MedianOf(std::vector<int32>& values)
+    {
+        if (values.empty())
+            return -1;
+
+        std::sort(values.begin(), values.end());
+        return values[values.size() / 2];
+    }
+
+    std::vector<EnhancedSupport::ArenaTelemetryPlayerReport> AnalyzeArenaRows(std::vector<ArenaEventRow>& rows)
+    {
+        struct OpenCast
+        {
+            uint64 startMs = 0;
+            uint32 castTimeMs = 0;  // 0 for channels
+            uint64 cancelMs = 0;
+            bool cancelBySelf = false;
+            bool open = false;
+        };
+
+        struct PlayerAgg
+        {
+            uint8 team = 0;
+            std::vector<int32> interruptReactions;
+            std::vector<int32> dispelReactions;
+            uint32 fakeCasts = 0;
+            uint32 fakeCastBites = 0;
+            uint64 latencySum = 0;
+            uint32 latencyCount = 0;
+        };
+
+        std::sort(rows.begin(), rows.end(),
+            [](ArenaEventRow const& a, ArenaEventRow const& b) { return a.timeMs < b.timeMs; });
+
+        std::unordered_map<uint32 /*guidLow*/, OpenCast> casts;
+        std::unordered_map<uint32 /*guidLow*/, uint64> lastAuraMs;
+        std::unordered_map<uint32 /*guidLow*/, PlayerAgg> players;
+
+        for (ArenaEventRow const& row : rows)
+        {
+            PlayerAgg& actor = players[row.actorGuid];
+            actor.team = row.actorTeam;
+
+            switch (row.eventType)
+            {
+                case ARENA_EVENT_CAST_START:
+                {
+                    OpenCast& cast = casts[row.actorGuid];
+                    cast.startMs = row.timeMs;
+                    cast.castTimeMs = row.extra;
+                    cast.open = true;
+                    break;
+                }
+                case ARENA_EVENT_CAST_CANCEL:
+                {
+                    OpenCast& cast = casts[row.actorGuid];
+                    if (!cast.open)
+                        break;
+
+                    cast.open = false;
+                    cast.cancelMs = row.timeMs;
+                    cast.cancelBySelf = row.extra == 1;
+                    if (cast.cancelBySelf)
+                        ++actor.fakeCasts;
+                    break;
+                }
+                case ARENA_EVENT_AURA_APPLY:
+                    lastAuraMs[row.actorGuid] = row.timeMs;
+                    break;
+                case ARENA_EVENT_CAST_GO:
+                {
+                    actor.latencySum += row.latencyMs;
+                    ++actor.latencyCount;
+
+                    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(row.spellId);
+                    if (!spellInfo)
+                        break;
+
+                    // The caster's own cast bar completed. Channels stay open
+                    // until their cancel row, since kicks land mid-channel.
+                    if (!spellInfo->IsChanneled())
+                    {
+                        auto own = casts.find(row.actorGuid);
+                        if (own != casts.end())
+                            own->second.open = false;
+                    }
+
+                    ObjectGuid const target(row.targetGuid);
+                    if (!target.IsPlayer())
+                        break;
+
+                    uint32 const targetLow = target.GetCounter();
+
+                    if (spellInfo->HasEffect(SPELL_EFFECT_INTERRUPT_CAST))
+                    {
+                        auto it = casts.find(targetLow);
+                        if (it != casts.end())
+                        {
+                            OpenCast const& cast = it->second;
+                            uint64 const windowMs = cast.castTimeMs > 0 ? cast.castTimeMs + 500 : 10000;
+                            if (cast.open && row.timeMs >= cast.startMs && row.timeMs - cast.startMs <= windowMs)
+                                actor.interruptReactions.push_back(AdjustedReactionMs(cast.startMs, row.timeMs, row.latencyMs));
+                            // When the kick itself interrupted the cast, the victim's
+                            // cancel row lands just before the kick's cast row.
+                            else if (!cast.open && !cast.cancelBySelf && row.timeMs >= cast.cancelMs && row.timeMs - cast.cancelMs <= 200)
+                                actor.interruptReactions.push_back(AdjustedReactionMs(cast.startMs, row.timeMs, row.latencyMs));
+                            // Kick thrown just after the target cancelled their own cast: baited.
+                            else if (!cast.open && cast.cancelBySelf && row.timeMs >= cast.cancelMs && row.timeMs - cast.cancelMs <= 1200)
+                                ++actor.fakeCastBites;
+                        }
+                    }
+
+                    if (spellInfo->HasEffect(SPELL_EFFECT_DISPEL))
+                    {
+                        auto it = lastAuraMs.find(targetLow);
+                        if (it != lastAuraMs.end() && row.timeMs >= it->second && row.timeMs - it->second <= 8000)
+                            actor.dispelReactions.push_back(AdjustedReactionMs(it->second, row.timeMs, row.latencyMs));
+                    }
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
+
+        std::vector<EnhancedSupport::ArenaTelemetryPlayerReport> reports;
+        reports.reserve(players.size());
+        for (auto& [guidLow, agg] : players)
+        {
+            EnhancedSupport::ArenaTelemetryPlayerReport report;
+            report.guidLow = guidLow;
+            report.team = agg.team;
+            report.interrupts = static_cast<uint32>(agg.interruptReactions.size());
+            report.dispels = static_cast<uint32>(agg.dispelReactions.size());
+            report.fakeCasts = agg.fakeCasts;
+            report.fakeCastBites = agg.fakeCastBites;
+            report.avgLatencyMs = agg.latencyCount != 0 ? static_cast<uint32>(agg.latencySum / agg.latencyCount) : 0;
+
+            for (int32 reaction : agg.interruptReactions)
+                if (reaction <= static_cast<int32>(_suspectReactionMs))
+                    ++report.fastInterrupts;
+            for (int32 reaction : agg.dispelReactions)
+                if (reaction <= static_cast<int32>(_suspectReactionMs))
+                    ++report.fastDispels;
+
+            report.medianInterruptMs = MedianOf(agg.interruptReactions);
+            report.minInterruptMs = agg.interruptReactions.empty() ? -1 : agg.interruptReactions.front();
+            report.medianDispelMs = MedianOf(agg.dispelReactions);
+            report.minDispelMs = agg.dispelReactions.empty() ? -1 : agg.dispelReactions.front();
+
+            uint32 const total = report.interrupts + report.dispels;
+            uint32 const fast = report.fastInterrupts + report.fastDispels;
+            report.suspicious = fast >= _suspectMinEvents && fast * 100 >= total * _suspectPercent;
+
+            reports.push_back(report);
+        }
+
+        return reports;
+    }
+
+    std::string ResolvePlayerName(uint32 guidLow)
+    {
+        std::string name;
+        if (!sCharacterCache->GetCharacterNameByGuid(ObjectGuid(HighGuid::Player, guidLow), name) || name.empty())
+            name = "Unknown";
+        return name;
+    }
+
+    // Logs (and relays to Discord, like the chat filter) every flagged player of
+    // a just-ended match. Log-only; no punishment is issued.
+    void ReportSuspiciousPlayers(Battleground* bg, std::vector<EnhancedSupport::ArenaTelemetryPlayerReport> const& reports)
+    {
+#ifdef HAS_CHAT_TRANSMITTER
+        std::string lines;
+#endif
+        for (EnhancedSupport::ArenaTelemetryPlayerReport const& report : reports)
+        {
+            if (!report.suspicious)
+                continue;
+
+            std::string const name = ResolvePlayerName(report.guidLow);
+
+            LOG_INFO("module.enhancedsupport",
+                "ArenaTelemetry: match {} ({}v{}{}) flagged {} ({}) - interrupts {} (fast {}, min {}ms, median {}ms), "
+                "dispels {} (fast {}, min {}ms, median {}ms), jukes bitten {}, latency ~{}ms",
+                bg->GetInstanceID(), static_cast<uint32>(bg->GetArenaType()), static_cast<uint32>(bg->GetArenaType()), bg->isRated() ? ", rated" : "",
+                name, report.guidLow,
+                report.interrupts, report.fastInterrupts, report.minInterruptMs, report.medianInterruptMs,
+                report.dispels, report.fastDispels, report.minDispelMs, report.medianDispelMs,
+                report.fakeCastBites, report.avgLatencyMs);
+
+#ifdef HAS_CHAT_TRANSMITTER
+            lines += Acore::StringFormat(
+                "\n👤 **{}** (GUID {}) — interrupts {} ({} fast, min {}ms, median {}ms) | "
+                "dispels {} ({} fast, min {}ms, median {}ms) | jukes bitten {} | latency ~{}ms",
+                name, report.guidLow,
+                report.interrupts, report.fastInterrupts, report.minInterruptMs, report.medianInterruptMs,
+                report.dispels, report.fastDispels, report.minDispelMs, report.medianDispelMs,
+                report.fakeCastBites, report.avgLatencyMs);
+#endif
+        }
+
+#ifdef HAS_CHAT_TRANSMITTER
+        if (!lines.empty())
+        {
+            std::string note = Acore::StringFormat(
+                "🕵️ **Arena telemetry alert** — match {} ({}v{}{}), reactions ≤ {}ms after latency count as fast\n"
+                "Check with `.support arena check {}`{}",
+                bg->GetInstanceID(), static_cast<uint32>(bg->GetArenaType()), static_cast<uint32>(bg->GetArenaType()), bg->isRated() ? ", rated" : "",
+                _suspectReactionMs, bg->GetInstanceID(), lines);
+            sChatTransmitter->QueueNotification("ChatFilter", note);
+        }
+#endif
+    }
 }
 
 namespace EnhancedSupport
@@ -252,6 +502,11 @@ namespace EnhancedSupport
                 _telemetryPositionSampleMs);
             _telemetryPositionSampleMs = 100;
         }
+
+        _telemetryAutoCheck = sConfigMgr->GetOption<bool>("EnhancedSupport.ArenaTelemetry.AutoCheck", false);
+        _suspectReactionMs = sConfigMgr->GetOption<uint32>("EnhancedSupport.ArenaTelemetry.Suspect.ReactionMs", 180);
+        _suspectMinEvents = sConfigMgr->GetOption<uint32>("EnhancedSupport.ArenaTelemetry.Suspect.MinEvents", 4);
+        _suspectPercent = std::min<uint32>(sConfigMgr->GetOption<uint32>("EnhancedSupport.ArenaTelemetry.Suspect.Percent", 60), 100);
     }
 
     bool GetArenaTelemetryEnabled()
@@ -272,6 +527,66 @@ namespace EnhancedSupport
     uint32 GetArenaTelemetryRetentionDays()
     {
         return _telemetryRetentionDays;
+    }
+
+    bool GetArenaTelemetryAutoCheck()
+    {
+        return _telemetryAutoCheck;
+    }
+
+    uint32 GetArenaTelemetrySuspectReactionMs()
+    {
+        return _suspectReactionMs;
+    }
+
+    uint32 GetArenaTelemetrySuspectMinEvents()
+    {
+        return _suspectMinEvents;
+    }
+
+    uint32 GetArenaTelemetrySuspectPercent()
+    {
+        return _suspectPercent;
+    }
+
+    std::vector<ArenaTelemetryPlayerReport> CheckArenaMatch(uint32 matchId)
+    {
+        std::vector<ArenaEventRow> rows;
+
+        // Match analysis is a manual GM action on a few thousand rows, so a
+        // synchronous read is fine here.
+        QueryResult result = CharacterDatabase.Query(
+            "SELECT time_ms, event_type, actor_guid, actor_team, spell_id, target_guid, extra, latency_ms "
+            "FROM enhanced_support_arena_events WHERE match_id = {} ORDER BY time_ms, id", matchId);
+        if (result)
+        {
+            do
+            {
+                Field* fields = result->Fetch();
+                ArenaEventRow row{};
+                row.timeMs = fields[0].Get<uint64>();
+                row.eventType = fields[1].Get<uint8>();
+                row.actorGuid = fields[2].Get<uint32>();
+                row.actorTeam = fields[3].Get<uint8>();
+                row.spellId = fields[4].Get<uint32>();
+                row.targetGuid = fields[5].Get<uint64>();
+                row.extra = fields[6].Get<uint32>();
+                row.latencyMs = fields[7].Get<uint32>();
+                rows.push_back(row);
+            } while (result->NextRow());
+        }
+
+        // Not flushed yet: the match is still running (or just ending); analyze
+        // a copy of its live buffer instead.
+        if (rows.empty())
+        {
+            std::lock_guard<std::mutex> guard(_matchesLock);
+            auto it = _matchBuffers.find(matchId);
+            if (it != _matchBuffers.end())
+                rows = it->second;
+        }
+
+        return AnalyzeArenaRows(rows);
     }
 }
 
@@ -419,7 +734,9 @@ public:
 
 // Flushes a match's buffered events once it ends (the round is over, no further
 // events are recorded past STATUS_IN_PROGRESS), with the destroy hook as a
-// fallback for arenas that never end normally.
+// fallback for arenas that never end normally. When AutoCheck is on, the ended
+// match is analyzed on its still-in-memory rows first - no DB read - and any
+// flagged player is logged and relayed to Discord.
 class EnhancedSupportArenaTelemetryFlusher : public AllBattlegroundScript
 {
 public:
@@ -430,8 +747,18 @@ public:
 
     void OnBattlegroundEnd(Battleground* bg, TeamId /*winnerTeamId*/) override
     {
-        if (bg->isArena())
-            FlushMatch(bg->GetInstanceID());
+        if (!bg->isArena())
+            return;
+
+        uint32 const matchId = bg->GetInstanceID();
+        std::vector<ArenaEventRow> rows = TakeMatch(matchId);
+        if (rows.empty())
+            return;
+
+        if (_telemetryAutoCheck)
+            ReportSuspiciousPlayers(bg, AnalyzeArenaRows(rows));
+
+        FlushRows(matchId, rows);
     }
 
     void OnBattlegroundDestroy(Battleground* bg) override

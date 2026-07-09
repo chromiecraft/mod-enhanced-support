@@ -413,6 +413,46 @@ EnhancedSupport.ArenaTelemetry.PositionSampleMs = 500
 EnhancedSupport.ArenaTelemetry.RetentionDays = 30
 
 #
+#    EnhancedSupport.ArenaTelemetry.AutoCheck
+#        Description: Analyze each recorded match when it ends (on its in-memory events, no
+#                     DB read) and log flagged players - relayed to Discord via
+#                     mod-chat-transmitter (ChatFilter alias) when available, like the chat
+#                     filter notices. A player is flagged when their latency-adjusted
+#                     interrupt/dispel reactions cross the Suspect thresholds below.
+#                     Log/report-only: nobody is punished automatically, and a single match
+#                     is never proof - use `.support arena check <matchId>` and compare the
+#                     player's other matches before acting.
+#        Default:     0 (disabled)
+#                     1 (enabled)
+#
+
+EnhancedSupport.ArenaTelemetry.AutoCheck = 0
+
+#
+#    EnhancedSupport.ArenaTelemetry.Suspect.ReactionMs
+#        Description: A reaction (enemy cast bar -> interrupt, or aura application -> dispel)
+#                     counts as suspiciously fast when it is at or below this many
+#                     milliseconds after subtracting the player's latency. Human reactions to
+#                     visual cues sit around 200-500ms even at high rating.
+#        Default:     180
+#
+#    EnhancedSupport.ArenaTelemetry.Suspect.MinEvents
+#        Description: Minimum number of fast reactions in one match before a player can be
+#                     flagged. Guards against a lucky kick or two.
+#        Default:     4
+#
+#    EnhancedSupport.ArenaTelemetry.Suspect.Percent
+#        Description: Minimum share (percent) of the player's reactions in the match that
+#                     must be fast for a flag. Guards against high-volume players who are
+#                     occasionally quick.
+#        Default:     60
+#
+
+EnhancedSupport.ArenaTelemetry.Suspect.ReactionMs = 180
+EnhancedSupport.ArenaTelemetry.Suspect.MinEvents = 4
+EnhancedSupport.ArenaTelemetry.Suspect.Percent = 60
+
+#
 #    EnhancedSupport.StartupNotice.Enable
 #        Description: Post a Discord notice when the world server has started, showing the
 #                     git revision the server is running. Requires mod-chat-transmitter to

@@ -209,6 +209,33 @@ single transaction of multi-row inserts when the match ends, on arena teardown,
 or on clean server shutdown - a running match causes no DB traffic. A server
 crash loses the in-flight matches' telemetry only.
 
+#### Built-in match analysis
+
+Two tools run the reaction analysis on a recorded match. Responses are
+classified by spell effect (interrupt / dispel), so no spell list needs
+maintaining; each reaction is reduced by the player's latency at that moment. A
+reaction counts as *fast* at or below `ArenaTelemetry.Suspect.ReactionMs`
+(default 180ms - human reactions to visual cues sit around 200-500ms even at
+high rating), and a player is *flagged* with at least
+`ArenaTelemetry.Suspect.MinEvents` fast reactions making up at least
+`ArenaTelemetry.Suspect.Percent` of their reactions in the match.
+
+- `.support arena matches [count]` lists recently recorded matches;
+  `.support arena check <matchId>` prints per-player statistics for one match
+  (interrupt and dispel reaction counts/min/median, fake casts thrown and
+  bitten, average latency) and marks flagged players. Running matches are
+  analyzed from the live buffer.
+- With `ArenaTelemetry.AutoCheck` enabled, every recorded match is analyzed
+  when it ends - on its in-memory events, before the DB write - and flagged
+  players are logged under `module.enhancedsupport` and relayed to Discord via
+  the ChatFilter alias (requires mod-chat-transmitter), like the chat filter
+  notices.
+
+Both are report-only: nobody is punished automatically. One match is never
+proof (spell queueing and lucky reactions exist); treat a flag as a pointer to
+compare that player's other matches, ideally with the offline analysis over a
+longer period.
+
 This is log-only evidence gathering: no gameplay is altered and no automated
 punishment is issued. Client-side scanning cannot see AHK (it only sends
 keystrokes), which is why behavioural telemetry is the detection layer here.
@@ -239,6 +266,8 @@ All commands live under `.support` and work in-game and from the server console.
 | `.support emailpattern remove <pattern>` | Administrator | Removes an email pattern.                                                                     |
 | `.support list emailpatterns`            | Game Master   | Lists the configured email patterns.                                                          |
 | `.support list bans [count] [author]`    | Game Master   | Lists the most recent account bans (newest first). `count` defaults to 10, max 50; `author` filters by the ban author substring and defaults to `EnhancedSupport.MailFilter.BanAuthor`, so a bare call shows the module's own bans. |
+| `.support arena matches [count]`         | Game Master   | Lists the most recently recorded arena matches (id, size, start, duration, event count). `count` defaults to 10, max 50. |
+| `.support arena check <matchId>`         | Game Master   | Analyzes one recorded match and prints per-player reaction statistics, marking players who cross the suspect thresholds. |
 
 Examples: `.support keyword add wowgold`, `.support list keywords`,
 `.support list bans` (module bans), `.support list bans 50 GM_Name`.
@@ -258,6 +287,10 @@ Examples: `.support keyword add wowgold`, `.support list keywords`,
 | `EnhancedSupport.ArenaTelemetry.RatedOnly` | `1` | Record rated matches only; `0` also records skirmishes |
 | `EnhancedSupport.ArenaTelemetry.PositionSampleMs` | `500` | Interval between position/orientation samples (min 100); `0` disables sampling, cast/aura events remain |
 | `EnhancedSupport.ArenaTelemetry.RetentionDays` | `30` | Purge events older than this on startup; `0` keeps everything |
+| `EnhancedSupport.ArenaTelemetry.AutoCheck` | `0` | Analyze each match at its end and report flagged players to the log and Discord (ChatFilter alias) |
+| `EnhancedSupport.ArenaTelemetry.Suspect.ReactionMs` | `180` | Latency-adjusted reaction at/below this is "fast" |
+| `EnhancedSupport.ArenaTelemetry.Suspect.MinEvents` | `4` | Minimum fast reactions in a match to flag a player |
+| `EnhancedSupport.ArenaTelemetry.Suspect.Percent` | `60` | Minimum share of the player's reactions that must be fast to flag |
 | `EnhancedSupport.StartupNotice.Enable` | `0`     | Post a Discord notice with the git revision on server start (needs mod-chat-transmitter) |
 | `EnhancedSupport.StartupNotice.Message`| `Server restarted!` | Headline for the startup notice; the full version line is shown below it in a code block |
 | `EnhancedSupport.StartupNotice.DelaySeconds`| `5`  | Seconds to wait after startup before sending, so the relay's WebSocket is up |

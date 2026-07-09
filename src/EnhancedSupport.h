@@ -118,6 +118,37 @@ namespace EnhancedSupport
     bool GetArenaTelemetryRatedOnly();
     uint32 GetArenaTelemetryPositionSampleMs();
     uint32 GetArenaTelemetryRetentionDays();
+    bool GetArenaTelemetryAutoCheck();
+    uint32 GetArenaTelemetrySuspectReactionMs();
+    uint32 GetArenaTelemetrySuspectMinEvents();
+    uint32 GetArenaTelemetrySuspectPercent();
+
+    // Per-player result of analyzing one match's telemetry. Reaction figures are
+    // milliseconds, reduced by the player's latency at the response; -1 means no
+    // data. "Fast" counts reactions at or below the suspect threshold. A player
+    // is suspicious when their fast reactions reach the configured minimum count
+    // and share (see the ArenaTelemetry.Suspect.* options).
+    struct ArenaTelemetryPlayerReport
+    {
+        uint32 guidLow = 0;
+        uint8 team = 0;
+        uint32 interrupts = 0;      // interrupt casts matched to an enemy cast bar
+        uint32 fastInterrupts = 0;
+        int32 minInterruptMs = -1;
+        int32 medianInterruptMs = -1;
+        uint32 dispels = 0;         // dispel casts matched to a dispellable aura on their target
+        uint32 fastDispels = 0;
+        int32 minDispelMs = -1;
+        int32 medianDispelMs = -1;
+        uint32 fakeCasts = 0;       // own casts cancelled by the player (jukes thrown)
+        uint32 fakeCastBites = 0;   // interrupts thrown right after an enemy fake cast (jukes bitten)
+        uint32 avgLatencyMs = 0;
+        bool suspicious = false;
+    };
+
+    // Analyzes a finished match from the DB (falls back to the in-memory buffer
+    // of a still-running match). Synchronous; intended for the .support command.
+    std::vector<ArenaTelemetryPlayerReport> CheckArenaMatch(uint32 matchId);
 
     // Highest valid mail filter action value.
     uint8 GetMaxMailFilterAction();
