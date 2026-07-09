@@ -446,10 +446,11 @@ public:
             if (!sCharacterCache->GetCharacterNameByGuid(ObjectGuid(HighGuid::Player, report.guidLow), name) || name.empty())
                 name = "Unknown";
 
-            handler->PSendSysMessage("  [team {}] {} (GUID {}): interrupts {} | dispels {} | jukes thrown {}, bitten {} | latency ~{}ms{}",
+            handler->PSendSysMessage("  [team {}] {} (GUID {}): interrupts {} | dispels {} | CC breaks {} | jukes thrown {}, bitten {} | latency ~{}ms{}",
                 report.team, name, report.guidLow,
                 reactionBlock(report.interrupts, report.fastInterrupts, report.minInterruptMs, report.medianInterruptMs),
                 reactionBlock(report.dispels, report.fastDispels, report.minDispelMs, report.medianDispelMs),
+                reactionBlock(report.ccBreaks, report.fastCCBreaks, report.minCCBreakMs, report.medianCCBreakMs),
                 report.fakeCasts, report.fakeCastBites, report.avgLatencyMs,
                 report.suspicious ? "  << SUSPICIOUS" : "");
         }

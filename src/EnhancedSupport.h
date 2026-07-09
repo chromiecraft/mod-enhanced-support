@@ -140,6 +140,10 @@ namespace EnhancedSupport
         uint32 fastDispels = 0;
         int32 minDispelMs = -1;
         int32 medianDispelMs = -1;
+        uint32 ccBreaks = 0;        // trinket/immunity casts matched to CC that just landed on them
+        uint32 fastCCBreaks = 0;
+        int32 minCCBreakMs = -1;
+        int32 medianCCBreakMs = -1;
         uint32 fakeCasts = 0;       // own casts cancelled by the player (jukes thrown)
         uint32 fakeCastBites = 0;   // interrupts thrown right after an enemy fake cast (jukes bitten)
         uint32 avgLatencyMs = 0;

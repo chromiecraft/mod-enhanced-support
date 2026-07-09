@@ -179,21 +179,28 @@ offline statistical analysis across many matches, where automation shows up as:
   match after match. Humans get juked.
 - **Dispel reactions** keyed off dispellable-aura applications, including
   frame-perfect dispels of effects on targets the player wasn't focusing.
-- **Facing behaviour** from the periodic position/orientation samples: facing
-  scripts snap onto their attacker within one movement packet, so the victim's
-  frontal arc never lapses while being circled.
+- **CC-break reactions**: loss-of-control effects (stuns, fears, roots, ...)
+  landing on a player, answered by a removal or immunity cast (PvP trinket,
+  Berserker Rage, Ice Block, ...). Classified by the spell's mechanic-removal/
+  immunity data, not by spell lists.
+- **Facing behaviour** from the periodic position/orientation samples plus the
+  target's position/orientation captured on every cast row (for behind-arc
+  abilities like Shred): facing scripts snap onto their attacker within one
+  movement packet, so the victim's frontal arc never lapses while being circled.
 
 Event rows carry the match (battleground instance id, map, arena type, rated
 flag), a millisecond timestamp, the acting player (GUID and team), spell id,
 target GUID, the actor's current latency (to normalize reaction times per
-player) and position/orientation. Event types:
+player), the actor's position/orientation and the target unit's
+position/orientation at that instant (`tgt_*`, zero when there is no unit
+target). Event types:
 
 | Type | Event         | `extra`                                    |
 | ---- | ------------- | ------------------------------------------ |
 | `1`  | Cast start    | cast time in ms (cast bar appeared)        |
 | `2`  | Cast cancel   | `1` cancelled by the caster (fake cast), `0` interrupted/failed |
 | `3`  | Cast fired    | -                                          |
-| `4`  | Aura applied  | dispel type (only dispellable auras on players are recorded); actor is the aura target, `target_guid` the caster |
+| `4`  | Aura applied  | dispel type (`0` for non-dispellable CC such as stuns); dispellable and loss-of-control auras on players are recorded; actor is the aura target, `target_guid` the caster |
 | `5`  | Position sample | - (`target_guid` is the player's current selection) |
 
 GMs and spectators are never recorded, and the arena preparation phase (before
@@ -222,8 +229,8 @@ high rating), and a player is *flagged* with at least
 
 - `.support arena matches [count]` lists recently recorded matches;
   `.support arena check <matchId>` prints per-player statistics for one match
-  (interrupt and dispel reaction counts/min/median, fake casts thrown and
-  bitten, average latency) and marks flagged players. Running matches are
+  (interrupt, dispel and CC-break reaction counts/min/median, fake casts thrown
+  and bitten, average latency) and marks flagged players. Running matches are
   analyzed from the live buffer.
 - With `ArenaTelemetry.AutoCheck` enabled, every recorded match is analyzed
   when it ends - on its in-memory events, before the DB write - and flagged

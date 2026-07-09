@@ -23,6 +23,7 @@
 #include "GameTime.h"
 #include "Log.h"
 #include "Map.h"
+#include "ObjectAccessor.h"
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "Spell.h"
@@ -62,10 +63,21 @@ namespace
     {
         ARENA_EVENT_CAST_START  = 1, // a cast bar appeared; extra = cast time (ms). Interrupt-bot stimulus.
         ARENA_EVENT_CAST_CANCEL = 2, // extra = 1 cancelled by the caster (fake cast), 0 interrupted/failed
-        ARENA_EVENT_CAST_GO     = 3, // spell actually fired (instants included). Interrupt/dispel response.
-        ARENA_EVENT_AURA_APPLY  = 4, // dispellable aura landed on a player; extra = dispel type. Dispel-bot stimulus.
+        ARENA_EVENT_CAST_GO     = 3, // spell actually fired (instants included). Interrupt/dispel/CC-break response.
+        ARENA_EVENT_AURA_APPLY  = 4, // dispellable or controlling aura landed on a player; extra = dispel
+                                     // type (0 for non-dispellable CC like stuns). Dispel/CC-break-bot stimulus.
         ARENA_EVENT_POSITION    = 5, // periodic position/orientation sample, for facing analysis
     };
+
+    // Loss-of-control mechanics whose aura applications are recorded as stimuli
+    // and matched against removal/immunity responses (trinket, Berserker Rage,
+    // ...). Snare/daze are deliberately absent: every frost bolt would log one.
+    constexpr uint64 CONTROL_MECHANIC_MASK =
+        (1ULL << MECHANIC_CHARM) | (1ULL << MECHANIC_DISORIENTED) | (1ULL << MECHANIC_FEAR) |
+        (1ULL << MECHANIC_ROOT) | (1ULL << MECHANIC_SILENCE) | (1ULL << MECHANIC_SLEEP) |
+        (1ULL << MECHANIC_STUN) | (1ULL << MECHANIC_FREEZE) | (1ULL << MECHANIC_KNOCKOUT) |
+        (1ULL << MECHANIC_POLYMORPH) | (1ULL << MECHANIC_BANISH) | (1ULL << MECHANIC_SHACKLE) |
+        (1ULL << MECHANIC_TURN) | (1ULL << MECHANIC_HORROR) | (1ULL << MECHANIC_SAPPED);
 
     bool _telemetryEnabled = false;
     bool _telemetryRatedOnly = true;
@@ -99,6 +111,9 @@ namespace
         float posX;
         float posY;
         float orientation;
+        float tgtX;         // target unit's position/orientation at event time;
+        float tgtY;         // all zero when the event has no resolvable unit target
+        float tgtO;
     };
 
     // A match's rows never hit the DB while it runs; they accumulate here and
@@ -165,15 +180,15 @@ namespace
             if (inChunk == 0)
                 sql = "INSERT INTO enhanced_support_arena_events "
                     "(time_ms, match_id, map_id, arena_type, rated, event_type, actor_guid, actor_team, "
-                    "spell_id, target_guid, extra, latency_ms, pos_x, pos_y, orientation) VALUES ";
+                    "spell_id, target_guid, extra, latency_ms, pos_x, pos_y, orientation, tgt_x, tgt_y, tgt_o) VALUES ";
             else
                 sql += ", ";
 
-            sql += Acore::StringFormat("({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+            sql += Acore::StringFormat("({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
                 row.timeMs, matchId, row.mapId, static_cast<uint32>(row.arenaType), row.rated ? 1 : 0,
                 static_cast<uint32>(row.eventType), row.actorGuid, static_cast<uint32>(row.actorTeam),
                 row.spellId, row.targetGuid, row.extra, row.latencyMs,
-                row.posX, row.posY, row.orientation);
+                row.posX, row.posY, row.orientation, row.tgtX, row.tgtY, row.tgtO);
 
             if (++inChunk == FLUSH_CHUNK_ROWS)
             {
@@ -240,6 +255,21 @@ namespace
         row.posY = actor->GetPositionY();
         row.orientation = actor->GetOrientation();
 
+        // The target's placement at the same instant, so facing checks (e.g.
+        // behind-arc abilities) don't depend on the nearest position sample.
+        row.tgtX = 0.0f;
+        row.tgtY = 0.0f;
+        row.tgtO = 0.0f;
+        if (target)
+        {
+            if (Unit const* targetUnit = ObjectAccessor::GetUnit(*actor, target))
+            {
+                row.tgtX = targetUnit->GetPositionX();
+                row.tgtY = targetUnit->GetPositionY();
+                row.tgtO = targetUnit->GetOrientation();
+            }
+        }
+
         uint32 const matchId = bg->GetInstanceID();
         bool overflow = false;
         {
@@ -279,6 +309,24 @@ namespace
         return values[values.size() / 2];
     }
 
+    // Mechanics this spell removes or grants immunity to when cast: dispel-by-
+    // mechanic effects (PvP trinket) plus the core's precomputed per-effect
+    // immunity masks (Berserker Rage, Ice Block, Blessing of Freedom, ...).
+    uint64 BreakMechanicMask(SpellInfo const* spellInfo)
+    {
+        uint64 mask = 0;
+        for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
+        {
+            if (spellInfo->Effects[i].Effect == SPELL_EFFECT_DISPEL_MECHANIC && spellInfo->Effects[i].MiscValue >= 0)
+                mask |= 1ULL << static_cast<uint32>(spellInfo->Effects[i].MiscValue);
+
+            if (ImmunityInfo const* immunity = spellInfo->GetImmunityInfo(i))
+                mask |= immunity->MechanicImmuneMask;
+        }
+
+        return mask & CONTROL_MECHANIC_MASK;
+    }
+
     std::vector<EnhancedSupport::ArenaTelemetryPlayerReport> AnalyzeArenaRows(std::vector<ArenaEventRow>& rows)
     {
         struct OpenCast
@@ -295,10 +343,18 @@ namespace
             uint8 team = 0;
             std::vector<int32> interruptReactions;
             std::vector<int32> dispelReactions;
+            std::vector<int32> ccBreakReactions;
             uint32 fakeCasts = 0;
             uint32 fakeCastBites = 0;
             uint64 latencySum = 0;
             uint32 latencyCount = 0;
+        };
+
+        // Last loss-of-control aura on a player, for matching CC-break responses.
+        struct ControlStimulus
+        {
+            uint64 timeMs = 0;
+            uint64 mechanicMask = 0;
         };
 
         std::sort(rows.begin(), rows.end(),
@@ -306,6 +362,7 @@ namespace
 
         std::unordered_map<uint32 /*guidLow*/, OpenCast> casts;
         std::unordered_map<uint32 /*guidLow*/, uint64> lastAuraMs;
+        std::unordered_map<uint32 /*guidLow*/, ControlStimulus> lastControl;
         std::unordered_map<uint32 /*guidLow*/, PlayerAgg> players;
 
         for (ArenaEventRow const& row : rows)
@@ -337,8 +394,17 @@ namespace
                     break;
                 }
                 case ARENA_EVENT_AURA_APPLY:
-                    lastAuraMs[row.actorGuid] = row.timeMs;
+                {
+                    // Dispellable auras (the capture stored the dispel type in
+                    // extra) feed dispel reactions; control auras feed CC breaks.
+                    if (row.extra != 0)
+                        lastAuraMs[row.actorGuid] = row.timeMs;
+
+                    if (SpellInfo const* auraInfo = sSpellMgr->GetSpellInfo(row.spellId))
+                        if (uint64 const ccMask = auraInfo->GetAllEffectsMechanicMask() & CONTROL_MECHANIC_MASK)
+                            lastControl[row.actorGuid] = { row.timeMs, ccMask };
                     break;
+                }
                 case ARENA_EVENT_CAST_GO:
                 {
                     actor.latencySum += row.latencyMs;
@@ -355,6 +421,22 @@ namespace
                         auto own = casts.find(row.actorGuid);
                         if (own != casts.end())
                             own->second.open = false;
+                    }
+
+                    // CC-break response: the cast removes or grants immunity to
+                    // the mechanic that just landed on the caster (trinket while
+                    // stunned, Berserker Rage on fear, ...). Checked before the
+                    // target gate since these casts are self-targeted. Consumed
+                    // on match, so one CC counts one response.
+                    if (uint64 const breakMask = BreakMechanicMask(spellInfo))
+                    {
+                        auto cc = lastControl.find(row.actorGuid);
+                        if (cc != lastControl.end() && (cc->second.mechanicMask & breakMask)
+                            && row.timeMs >= cc->second.timeMs && row.timeMs - cc->second.timeMs <= 8000)
+                        {
+                            actor.ccBreakReactions.push_back(AdjustedReactionMs(cc->second.timeMs, row.timeMs, row.latencyMs));
+                            lastControl.erase(cc);
+                        }
                     }
 
                     ObjectGuid const target(row.targetGuid);
@@ -404,6 +486,7 @@ namespace
             report.team = agg.team;
             report.interrupts = static_cast<uint32>(agg.interruptReactions.size());
             report.dispels = static_cast<uint32>(agg.dispelReactions.size());
+            report.ccBreaks = static_cast<uint32>(agg.ccBreakReactions.size());
             report.fakeCasts = agg.fakeCasts;
             report.fakeCastBites = agg.fakeCastBites;
             report.avgLatencyMs = agg.latencyCount != 0 ? static_cast<uint32>(agg.latencySum / agg.latencyCount) : 0;
@@ -414,14 +497,19 @@ namespace
             for (int32 reaction : agg.dispelReactions)
                 if (reaction <= static_cast<int32>(_suspectReactionMs))
                     ++report.fastDispels;
+            for (int32 reaction : agg.ccBreakReactions)
+                if (reaction <= static_cast<int32>(_suspectReactionMs))
+                    ++report.fastCCBreaks;
 
             report.medianInterruptMs = MedianOf(agg.interruptReactions);
             report.minInterruptMs = agg.interruptReactions.empty() ? -1 : agg.interruptReactions.front();
             report.medianDispelMs = MedianOf(agg.dispelReactions);
             report.minDispelMs = agg.dispelReactions.empty() ? -1 : agg.dispelReactions.front();
+            report.medianCCBreakMs = MedianOf(agg.ccBreakReactions);
+            report.minCCBreakMs = agg.ccBreakReactions.empty() ? -1 : agg.ccBreakReactions.front();
 
-            uint32 const total = report.interrupts + report.dispels;
-            uint32 const fast = report.fastInterrupts + report.fastDispels;
+            uint32 const total = report.interrupts + report.dispels + report.ccBreaks;
+            uint32 const fast = report.fastInterrupts + report.fastDispels + report.fastCCBreaks;
             report.suspicious = fast >= _suspectMinEvents && fast * 100 >= total * _suspectPercent;
 
             reports.push_back(report);
@@ -454,20 +542,24 @@ namespace
 
             LOG_INFO("module.enhancedsupport",
                 "ArenaTelemetry: match {} ({}v{}{}) flagged {} ({}) - interrupts {} (fast {}, min {}ms, median {}ms), "
-                "dispels {} (fast {}, min {}ms, median {}ms), jukes bitten {}, latency ~{}ms",
+                "dispels {} (fast {}, min {}ms, median {}ms), CC breaks {} (fast {}, min {}ms, median {}ms), "
+                "jukes bitten {}, latency ~{}ms",
                 bg->GetInstanceID(), static_cast<uint32>(bg->GetArenaType()), static_cast<uint32>(bg->GetArenaType()), bg->isRated() ? ", rated" : "",
                 name, report.guidLow,
                 report.interrupts, report.fastInterrupts, report.minInterruptMs, report.medianInterruptMs,
                 report.dispels, report.fastDispels, report.minDispelMs, report.medianDispelMs,
+                report.ccBreaks, report.fastCCBreaks, report.minCCBreakMs, report.medianCCBreakMs,
                 report.fakeCastBites, report.avgLatencyMs);
 
 #ifdef HAS_CHAT_TRANSMITTER
             lines += Acore::StringFormat(
                 "\n👤 **{}** (GUID {}) — interrupts {} ({} fast, min {}ms, median {}ms) | "
-                "dispels {} ({} fast, min {}ms, median {}ms) | jukes bitten {} | latency ~{}ms",
+                "dispels {} ({} fast, min {}ms, median {}ms) | "
+                "CC breaks {} ({} fast, min {}ms, median {}ms) | jukes bitten {} | latency ~{}ms",
                 name, report.guidLow,
                 report.interrupts, report.fastInterrupts, report.minInterruptMs, report.medianInterruptMs,
                 report.dispels, report.fastDispels, report.minDispelMs, report.medianDispelMs,
+                report.ccBreaks, report.fastCCBreaks, report.minCCBreakMs, report.medianCCBreakMs,
                 report.fakeCastBites, report.avgLatencyMs);
 #endif
         }
@@ -650,9 +742,11 @@ public:
     }
 };
 
-// Records dispellable auras landing on arena players - the stimulus a dispel
-// bot reacts to. The row is written from the aura target's perspective:
-// actor = the player the aura landed on, target_guid = the caster's raw GUID.
+// Records dispellable and loss-of-control auras landing on arena players - the
+// stimuli dispel and CC-break bots react to (roots/fears for dispels; stuns and
+// fears for trinket / Berserker Rage style breaks). The row is written from the
+// aura target's perspective: actor = the player the aura landed on, target_guid
+// = the caster's raw GUID.
 class EnhancedSupportArenaAuraTelemetry : public UnitScript
 {
 public:
@@ -667,7 +761,12 @@ public:
             return;
 
         SpellInfo const* spellInfo = aura->GetSpellInfo();
-        if (!spellInfo || spellInfo->Dispel == DISPEL_NONE)
+        if (!spellInfo)
+            return;
+
+        // Non-dispellable CC (stuns, ...) matters for CC-break reactions, so it
+        // is recorded too; extra keeps carrying the dispel type (0 for those).
+        if (spellInfo->Dispel == DISPEL_NONE && !(spellInfo->GetAllEffectsMechanicMask() & CONTROL_MECHANIC_MASK))
             return;
 
         if (Battleground* bg = GetTrackedArena(player))
