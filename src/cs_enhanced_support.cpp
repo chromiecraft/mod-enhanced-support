@@ -190,6 +190,18 @@ public:
                 handler->PSendSysMessage("  Auction notification batching: {}s window", auctionBatch);
         }
 
+        if (!EnhancedSupport::GetArenaTelemetryEnabled())
+            handler->SendSysMessage("  Arena telemetry: disabled");
+        else
+        {
+            uint32 const sampleMs = EnhancedSupport::GetArenaTelemetryPositionSampleMs();
+            uint32 const retentionDays = EnhancedSupport::GetArenaTelemetryRetentionDays();
+            handler->PSendSysMessage("  Arena telemetry: {}, position samples {}, retention {}",
+                EnhancedSupport::GetArenaTelemetryRatedOnly() ? "rated matches only" : "all arena matches",
+                sampleMs == 0 ? "off" : Acore::StringFormat("every {}ms", sampleMs),
+                retentionDays == 0 ? "unlimited" : Acore::StringFormat("{} day(s)", retentionDays));
+        }
+
         handler->PSendSysMessage("  Ban author: {}", EnhancedSupport::GetBanAuthor());
 
         std::string const& message = EnhancedSupport::GetMailFilterMessage();

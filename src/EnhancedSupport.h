@@ -109,6 +109,16 @@ namespace EnhancedSupport
     // Formats a copper amount as a "Xg Ys Zc" string.
     std::string FormatMoney(uint32 copper);
 
+    // Arena telemetry (cheat detection): raw cast/aura/position events from live
+    // arena matches, written to the characters DB table enhanced_support_arena_events
+    // for offline reaction-time and facing analysis. State lives in
+    // arena_telemetry.cpp; LoadConfig() calls LoadArenaTelemetryConfig().
+    void LoadArenaTelemetryConfig();
+    bool GetArenaTelemetryEnabled();
+    bool GetArenaTelemetryRatedOnly();
+    uint32 GetArenaTelemetryPositionSampleMs();
+    uint32 GetArenaTelemetryRetentionDays();
+
     // Highest valid mail filter action value.
     uint8 GetMaxMailFilterAction();
 

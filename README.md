@@ -163,6 +163,56 @@ the `.support emailpattern` commands below and shared across all realms, like th
 mail keywords. `EnhancedSupport.EmailFilter.Enable` is a master switch for the check
 (default on); when enabled it runs only once at least one pattern is configured.
 
+### Arena telemetry (cheat detection)
+
+Records raw combat events from live arena matches into the characters DB table
+`enhanced_support_arena_events`, for offline detection of input automation
+(AHK-style interrupt/dispel bots, facing scripts). A single fast reaction proves
+nothing - WotLK spell queueing and latency compensation make individual events
+ambiguous - so nothing is judged in real time. Instead the raw events feed
+offline statistical analysis across many matches, where automation shows up as:
+
+- **Interrupt reaction times** (interrupt cast minus enemy cast-bar start, minus
+  latency) with an inhumanly low floor and near-zero variance.
+- **Fake-cast responses**: a reflex bot fires on every cast start, so it
+  "answers" casts that were cancelled moments in, at the same fixed delay,
+  match after match. Humans get juked.
+- **Dispel reactions** keyed off dispellable-aura applications, including
+  frame-perfect dispels of effects on targets the player wasn't focusing.
+- **Facing behaviour** from the periodic position/orientation samples: facing
+  scripts snap onto their attacker within one movement packet, so the victim's
+  frontal arc never lapses while being circled.
+
+Event rows carry the match (battleground instance id, map, arena type, rated
+flag), a millisecond timestamp, the acting player (GUID and team), spell id,
+target GUID, the actor's current latency (to normalize reaction times per
+player) and position/orientation. Event types:
+
+| Type | Event         | `extra`                                    |
+| ---- | ------------- | ------------------------------------------ |
+| `1`  | Cast start    | cast time in ms (cast bar appeared)        |
+| `2`  | Cast cancel   | `1` cancelled by the caster (fake cast), `0` interrupted/failed |
+| `3`  | Cast fired    | -                                          |
+| `4`  | Aura applied  | dispel type (only dispellable auras on players are recorded); actor is the aura target, `target_guid` the caster |
+| `5`  | Position sample | - (`target_guid` is the player's current selection) |
+
+GMs and spectators are never recorded, and the arena preparation phase (before
+the gates open) is skipped. By default only rated matches are logged
+(`ArenaTelemetry.RatedOnly`) and events are purged after
+`ArenaTelemetry.RetentionDays` days on server startup. Volume is modest: a
+3-minute 3v3 match produces a few thousand rows, dominated by the position
+samples (`ArenaTelemetry.PositionSampleMs`, default 500ms, `0` to disable
+sampling while keeping the cast/aura events).
+
+Events are buffered in memory per match (a few hundred KB) and written in a
+single transaction of multi-row inserts when the match ends, on arena teardown,
+or on clean server shutdown - a running match causes no DB traffic. A server
+crash loses the in-flight matches' telemetry only.
+
+This is log-only evidence gathering: no gameplay is altered and no automated
+punishment is issued. Client-side scanning cannot see AHK (it only sends
+keystrokes), which is why behavioural telemetry is the detection layer here.
+
 ### Startup Discord notice
 
 When enabled, posts a decorated Discord message once the world server has
@@ -204,6 +254,10 @@ Examples: `.support keyword add wowgold`, `.support list keywords`,
 | `EnhancedSupport.LootFilter.LevelGap` | `0`      | Log loot whose required level exceeds the looter's level by at least this gap; `0` disables |
 | `EnhancedSupport.LootFilter.MaxLevel` | `0`      | Cap the loot check to looters at or below this level; `0` applies to all levels |
 | `EnhancedSupport.EmailFilter.Enable` | `1`       | Master switch for the account email-pattern check at character creation; runs once at least one pattern is configured |
+| `EnhancedSupport.ArenaTelemetry.Enable` | `0`   | Record arena combat telemetry (casts, cancels, dispellable auras, position samples) to `enhanced_support_arena_events` for offline cheat detection |
+| `EnhancedSupport.ArenaTelemetry.RatedOnly` | `1` | Record rated matches only; `0` also records skirmishes |
+| `EnhancedSupport.ArenaTelemetry.PositionSampleMs` | `500` | Interval between position/orientation samples (min 100); `0` disables sampling, cast/aura events remain |
+| `EnhancedSupport.ArenaTelemetry.RetentionDays` | `30` | Purge events older than this on startup; `0` keeps everything |
 | `EnhancedSupport.StartupNotice.Enable` | `0`     | Post a Discord notice with the git revision on server start (needs mod-chat-transmitter) |
 | `EnhancedSupport.StartupNotice.Message`| `Server restarted!` | Headline for the startup notice; the full version line is shown below it in a code block |
 | `EnhancedSupport.StartupNotice.DelaySeconds`| `5`  | Seconds to wait after startup before sending, so the relay's WebSocket is up |
@@ -214,12 +268,14 @@ Examples: `.support keyword add wowgold`, `.support list keywords`,
   the module's `Add*Scripts` registrars.
 - `src/mod_enhanced_support.cpp` — world/player scripts (config cache, mail filter).
 - `src/cs_enhanced_support.cpp` — the `.support` chat commands.
-- `src/EnhancedSupport.h` — shared config/keyword API used by both `.cpp` files.
+- `src/arena_telemetry.cpp` — the arena telemetry recorder (cheat detection).
+- `src/EnhancedSupport.h` — shared config/keyword API used by the `.cpp` files.
 - `conf/mod-enhanced-support.conf.dist` — distributed config template.
-- `data/sql/db-auth`, `data/sql/db-world` — `base`/`updates` SQL applied
-  automatically by the module DB updater. The mail keyword and email pattern
-  tables live in `db-auth/updates`; the `.support` command help rows in
-  `db-world/updates`.
+- `data/sql/db-auth`, `data/sql/db-world`, `data/sql/db-characters` —
+  `base`/`updates` SQL applied automatically by the module DB updater. The mail
+  keyword and email pattern tables live in `db-auth/updates`; the `.support`
+  command help rows in `db-world/updates`; the arena telemetry event table in
+  `db-characters/updates`.
 
 ## License
 

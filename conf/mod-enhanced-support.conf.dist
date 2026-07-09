@@ -362,6 +362,57 @@ EnhancedSupport.AuctionFilter.BatchSeconds = 0
 EnhancedSupport.EmailFilter.Enable = 1
 
 #
+#    EnhancedSupport.ArenaTelemetry.Enable
+#        Description: Record raw combat telemetry from live arena matches into the characters
+#                     DB table `enhanced_support_arena_events`, for offline cheat detection
+#                     (input automation such as AHK interrupt/dispel bots). Logged events:
+#                     cast bars appearing, cast cancels (fake casts), spells firing,
+#                     dispellable auras landing on players, and periodic position/orientation
+#                     samples. Log-only: gameplay is never altered, and no verdicts are made
+#                     in real time - the data is meant for offline statistical analysis
+#                     (reaction-time distributions, fake-cast responses, facing behaviour).
+#                     GMs and spectators are not recorded; the arena preparation phase
+#                     (before the gates open) is skipped. Also gated by EnhancedSupport.Enable.
+#        Default:     0 (disabled)
+#                     1 (enabled)
+#
+
+EnhancedSupport.ArenaTelemetry.Enable = 0
+
+#
+#    EnhancedSupport.ArenaTelemetry.RatedOnly
+#        Description: Record rated arena matches only. Skirmishes carry no ladder stakes and
+#                     add noise, so they are skipped by default.
+#        Default:     1 - Rated matches only
+#                     0 - Record every arena match, including skirmishes
+#
+
+EnhancedSupport.ArenaTelemetry.RatedOnly = 1
+
+#
+#    EnhancedSupport.ArenaTelemetry.PositionSampleMs
+#        Description: Interval (milliseconds) between position/orientation samples of each
+#                     living arena player, used for facing analysis (e.g. a player whose
+#                     frontal arc never lapses while an enemy circles them). Values below
+#                     100 are clamped to 100 to bound the write volume. At the default of
+#                     500ms a 3-minute 3v3 match produces roughly 2000 sample rows.
+#        Default:     500
+#                     0 - Disable position sampling (cast/aura events are still recorded)
+#
+
+EnhancedSupport.ArenaTelemetry.PositionSampleMs = 500
+
+#
+#    EnhancedSupport.ArenaTelemetry.RetentionDays
+#        Description: On server startup, delete recorded arena events older than this many
+#                     days, keeping the table bounded.
+#        Default:     30
+#                     0 - Keep everything (no automatic purge)
+#
+
+EnhancedSupport.ArenaTelemetry.RetentionDays = 30
+
+#
 #    EnhancedSupport.StartupNotice.Enable
 #        Description: Post a Discord notice when the world server has started, showing the
 #                     git revision the server is running. Requires mod-chat-transmitter to
