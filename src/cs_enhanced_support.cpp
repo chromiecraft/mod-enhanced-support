@@ -492,13 +492,17 @@ public:
             if (!sCharacterCache->GetCharacterNameByGuid(ObjectGuid(HighGuid::Player, report.guidLow), name) || name.empty())
                 name = "Unknown";
 
-            handler->PSendSysMessage("  [team {}] {} (GUID {}): interrupts {} | dispels {} | CC breaks {} | jukes thrown {}, bitten {} | latency ~{}ms{}",
+            handler->PSendSysMessage("=== [team {}] {} (GUID {}){} ===",
                 report.team, name, report.guidLow,
-                reactionBlock(report.interrupts, report.fastInterrupts, report.minInterruptMs, report.medianInterruptMs),
-                reactionBlock(report.dispels, report.fastDispels, report.minDispelMs, report.medianDispelMs),
-                reactionBlock(report.ccBreaks, report.fastCCBreaks, report.minCCBreakMs, report.medianCCBreakMs),
-                report.fakeCasts, report.fakeCastBites, report.avgLatencyMs,
-                report.suspicious ? "  << SUSPICIOUS" : "");
+                report.suspicious ? " << SUSPICIOUS" : "");
+            handler->PSendSysMessage("> Interrupts: {}",
+                reactionBlock(report.interrupts, report.fastInterrupts, report.minInterruptMs, report.medianInterruptMs));
+            handler->PSendSysMessage("> Dispels: {}",
+                reactionBlock(report.dispels, report.fastDispels, report.minDispelMs, report.medianDispelMs));
+            handler->PSendSysMessage("> CC breaks: {}",
+                reactionBlock(report.ccBreaks, report.fastCCBreaks, report.minCCBreakMs, report.medianCCBreakMs));
+            handler->PSendSysMessage("> Jukes: thrown {}, bitten {}", report.fakeCasts, report.fakeCastBites);
+            handler->PSendSysMessage("> Latency: ~{}ms", report.avgLatencyMs);
         }
 
         handler->SendSysMessage("Verdicts need several matches, not one: compare with this player's other matches before acting.");
