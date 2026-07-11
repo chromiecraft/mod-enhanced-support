@@ -189,11 +189,14 @@ offline statistical analysis across many matches, where automation shows up as:
   movement packet, so the victim's frontal arc never lapses while being circled.
 
 Event rows carry the match (battleground instance id, map, arena type, rated
-flag), a millisecond timestamp, the acting player (GUID and team), spell id,
-target GUID, the actor's current latency (to normalize reaction times per
+flag), a millisecond timestamp, the acting player (GUID and match side), the
+persistent rated arena team id (`arena_team_id`, `0` for unrated matches), spell
+id, target GUID, the actor's current latency (to normalize reaction times per
 player), the actor's position/orientation and the target unit's
 position/orientation at that instant (`tgt_*`, zero when there is no unit
-target). Event types:
+target). `actor_team` is only the side within a single match (0/1) and resets
+each match; use `arena_team_id` to follow a specific rated team across matches.
+Event types:
 
 | Type | Event         | `extra`                                    |
 | ---- | ------------- | ------------------------------------------ |
@@ -228,6 +231,8 @@ high rating), and a player is *flagged* with at least
 `ArenaTelemetry.Suspect.Percent` of their reactions in the match.
 
 - `.support arena matches [count]` lists recently recorded matches;
+  `.support arena team <arenaTeamId> [count]` lists the recorded matches a given
+  rated arena team played (unrated matches have no team id);
   `.support arena check <matchId>` prints per-player statistics for one match
   (interrupt, dispel and CC-break reaction counts/min/median, fake casts thrown
   and bitten, average latency) and marks flagged players. Running matches are
@@ -274,6 +279,7 @@ All commands live under `.support` and work in-game and from the server console.
 | `.support list emailpatterns`            | Game Master   | Lists the configured email patterns.                                                          |
 | `.support list bans [count] [author]`    | Game Master   | Lists the most recent account bans (newest first). `count` defaults to 10, max 50; `author` filters by the ban author substring and defaults to `EnhancedSupport.MailFilter.BanAuthor`, so a bare call shows the module's own bans. |
 | `.support arena matches [count]`         | Game Master   | Lists the most recently recorded arena matches (id, size, start, duration, event count). `count` defaults to 10, max 50. |
+| `.support arena team <arenaTeamId> [count]` | Game Master | Lists the recorded matches a given rated arena team took part in, newest first. `count` defaults to 10, max 50. Only rated matches carry a team id. |
 | `.support arena check <matchId>`         | Game Master   | Analyzes one recorded match and prints per-player reaction statistics, marking players who cross the suspect thresholds. |
 
 Examples: `.support keyword add wowgold`, `.support list keywords`,

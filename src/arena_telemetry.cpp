@@ -104,6 +104,7 @@ namespace
         uint8 eventType;
         uint32 actorGuid;
         uint8 actorTeam;
+        uint32 arenaTeamId;
         uint32 spellId;
         uint64 targetGuid;
         uint32 extra;
@@ -179,14 +180,14 @@ namespace
         {
             if (inChunk == 0)
                 sql = "INSERT INTO enhanced_support_arena_events "
-                    "(time_ms, match_id, map_id, arena_type, rated, event_type, actor_guid, actor_team, "
+                    "(time_ms, match_id, map_id, arena_type, rated, event_type, actor_guid, actor_team, arena_team_id, "
                     "spell_id, target_guid, extra, latency_ms, pos_x, pos_y, orientation, tgt_x, tgt_y, tgt_o) VALUES ";
             else
                 sql += ", ";
 
-            sql += Acore::StringFormat("({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+            sql += Acore::StringFormat("({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
                 row.timeMs, matchId, row.mapId, static_cast<uint32>(row.arenaType), row.rated ? 1 : 0,
-                static_cast<uint32>(row.eventType), row.actorGuid, static_cast<uint32>(row.actorTeam),
+                static_cast<uint32>(row.eventType), row.actorGuid, static_cast<uint32>(row.actorTeam), row.arenaTeamId,
                 row.spellId, row.targetGuid, row.extra, row.latencyMs,
                 row.posX, row.posY, row.orientation, row.tgtX, row.tgtY, row.tgtO);
 
@@ -247,6 +248,7 @@ namespace
         row.eventType = eventType;
         row.actorGuid = actor->GetGUID().GetCounter();
         row.actorTeam = static_cast<uint8>(actor->GetBgTeamId());
+        row.arenaTeamId = bg->GetArenaTeamIdForTeam(actor->GetBgTeamId());
         row.spellId = spellId;
         row.targetGuid = target.GetRawValue();
         row.extra = extra;

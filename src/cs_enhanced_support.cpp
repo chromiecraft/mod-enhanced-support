@@ -58,6 +58,7 @@ public:
         static ChatCommandTable arenaTable =
         {
             { "matches", HandleArenaMatchesCommand, SEC_GAMEMASTER, Console::Yes },
+            { "team",    HandleArenaTeamCommand,    SEC_GAMEMASTER, Console::Yes },
             { "check",   HandleArenaCheckCommand,   SEC_GAMEMASTER, Console::Yes },
         };
 
@@ -389,6 +390,51 @@ public:
         }
 
         handler->SendSysMessage("Recorded arena matches (newest first):");
+        do
+        {
+            Field* fields = result->Fetch();
+            uint32 const matchId = fields[0].Get<uint32>();
+            uint64 const firstMs = fields[1].Get<uint64>();
+            uint64 const lastMs = fields[2].Get<uint64>();
+            uint64 const events = fields[3].Get<uint64>();
+            uint32 const arenaType = fields[4].Get<uint8>();
+            bool const rated = fields[5].Get<uint8>() != 0;
+
+            uint64 const durationSec = (lastMs - firstMs) / 1000;
+            handler->PSendSysMessage("  match {} | {}v{}{} | {} | {}m {}s | {} event(s)",
+                matchId, arenaType, arenaType, rated ? " rated" : "",
+                Acore::Time::TimeToTimestampStr(Seconds(firstMs / 1000)),
+                durationSec / 60, durationSec % 60, events);
+        } while (result->NextRow());
+
+        return true;
+    }
+
+    // Lists the recorded matches a given rated arena team took part in, newest
+    // first. Only rated matches carry a team id; unrated arenas record 0.
+    static bool HandleArenaTeamCommand(ChatHandler* handler, uint32 arenaTeamId, Optional<uint32> count)
+    {
+        if (arenaTeamId == 0)
+        {
+            handler->SendSysMessage("Usage: .support arena team <arenaTeamId> [count]");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        uint32 const limit = std::clamp<uint32>(count.value_or(10), 1, 50);
+
+        QueryResult result = CharacterDatabase.Query(
+            "SELECT match_id, MIN(time_ms), MAX(time_ms), COUNT(*), MAX(arena_type), MAX(rated) "
+            "FROM enhanced_support_arena_events WHERE arena_team_id = {} "
+            "GROUP BY match_id ORDER BY MAX(time_ms) DESC LIMIT {}", arenaTeamId, limit);
+
+        if (!result)
+        {
+            handler->PSendSysMessage("No recorded arena matches found for team {}.", arenaTeamId);
+            return true;
+        }
+
+        handler->PSendSysMessage("Recorded matches for arena team {} (newest first):", arenaTeamId);
         do
         {
             Field* fields = result->Fetch();
