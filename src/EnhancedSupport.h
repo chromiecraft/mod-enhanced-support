@@ -127,7 +127,10 @@ namespace EnhancedSupport
     // milliseconds, reduced by the player's latency at the response; -1 means no
     // data. "Fast" counts reactions at or below the suspect threshold. A player
     // is suspicious when their fast reactions reach the configured minimum count
-    // and share (see the ArenaTelemetry.Suspect.* options).
+    // and share (see the ArenaTelemetry.Suspect.* options). Only interrupts,
+    // dispels, CC breaks and trinket-answer CC feed the flag; DoT reapplies, cast
+    // cadence and failed casts are informational (DoT expiry is predictable via
+    // timer addons, APM varies by spec).
     struct ArenaTelemetryPlayerReport
     {
         uint32 guidLow = 0;
@@ -144,6 +147,22 @@ namespace EnhancedSupport
         uint32 fastCCBreaks = 0;
         int32 minCCBreakMs = -1;
         int32 medianCCBreakMs = -1;
+        uint32 trinketCCs = 0;      // CC thrown at an enemy right after that enemy's trinket/immunity cast
+        uint32 fastTrinketCCs = 0;
+        int32 minTrinketCCMs = -1;
+        int32 medianTrinketCCMs = -1;
+        uint32 dotReapplies = 0;    // DoT casts matched to that DoT expiring or being dispelled on the target
+        uint32 fastDotReapplies = 0;
+        int32 minDotReapplyMs = -1;
+        int32 medianDotReapplyMs = -1;
+        uint32 casts = 0;           // successful non-triggered casts
+        int32 apm = -1;             // casts per minute over the match; -1 when the match is too short
+        int32 medianCastGapMs = -1; // spacing between consecutive casts, gaps over 10s excluded
+        int32 castGapIqrMs = -1;    // interquartile range of those gaps; near-zero spread suggests scripting
+        uint32 failedCasts = 0;     // server-rejected cast attempts (client-side rejections are invisible)
+        uint32 failedNothingToDispel = 0;
+        uint32 failedLos = 0;
+        uint32 failedRange = 0;     // out of range or wrong facing
         uint32 fakeCasts = 0;       // own casts cancelled by the player (jukes thrown)
         uint32 fakeCastBites = 0;   // interrupts thrown right after an enemy fake cast (jukes bitten)
         uint32 avgLatencyMs = 0;

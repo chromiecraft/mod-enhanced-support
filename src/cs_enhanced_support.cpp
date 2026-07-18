@@ -501,10 +501,39 @@ public:
                 reactionBlock(report.dispels, report.fastDispels, report.minDispelMs, report.medianDispelMs));
             handler->PSendSysMessage("> CC breaks: {}",
                 reactionBlock(report.ccBreaks, report.fastCCBreaks, report.minCCBreakMs, report.medianCCBreakMs));
+            handler->PSendSysMessage("> CC after enemy trinket: {}",
+                reactionBlock(report.trinketCCs, report.fastTrinketCCs, report.minTrinketCCMs, report.medianTrinketCCMs));
+            handler->PSendSysMessage("> DoT reapplies: {}",
+                reactionBlock(report.dotReapplies, report.fastDotReapplies, report.minDotReapplyMs, report.medianDotReapplyMs));
+
+            std::string cadence;
+            if (report.casts == 0)
+                cadence = "none";
+            else
+            {
+                cadence = Acore::StringFormat("{}", report.casts);
+                if (report.apm >= 0)
+                    cadence += Acore::StringFormat(", {} per minute", report.apm);
+                if (report.medianCastGapMs >= 0)
+                    cadence += Acore::StringFormat(", median gap {}ms", report.medianCastGapMs);
+                if (report.castGapIqrMs >= 0)
+                    cadence += Acore::StringFormat(" (IQR {}ms)", report.castGapIqrMs);
+            }
+            handler->PSendSysMessage("> Casts: {}", cadence);
+
+            if (report.failedCasts == 0)
+                handler->SendSysMessage("> Failed casts: none");
+            else
+                handler->PSendSysMessage("> Failed casts: {} (nothing to dispel {}, line of sight {}, range/facing {})",
+                    report.failedCasts, report.failedNothingToDispel, report.failedLos, report.failedRange);
+
             handler->PSendSysMessage("> Jukes: thrown {}, bitten {}", report.fakeCasts, report.fakeCastBites);
             handler->PSendSysMessage("> Latency: ~{}ms", report.avgLatencyMs);
         }
 
+        handler->SendSysMessage("DoT reapplies, cast cadence and failed casts are informational and never flag: "
+            "DoT expiry is predictable with timer addons, and cast volume varies by spec. "
+            "A scripted player shows a near-zero cast gap IQR and many 'nothing to dispel' failures.");
         handler->SendSysMessage("Verdicts need several matches, not one: compare with this player's other matches before acting.");
         return true;
     }

@@ -183,6 +183,23 @@ offline statistical analysis across many matches, where automation shows up as:
   landing on a player, answered by a removal or immunity cast (PvP trinket,
   Berserker Rage, Ice Block, ...). Classified by the spell's mechanic-removal/
   immunity data, not by spell lists.
+- **Trinket-answer CC**: an enemy's trinket/immunity cast answered with fresh
+  CC on that enemy. Cast-time CC counts from its cast start, so a poly
+  pre-cast in anticipation never matches; instant CC counts from its cast.
+- **DoT reapply timing**: a periodic-damage aura expiring (or being dispelled)
+  on a target, answered by the same caster reapplying that DoT. Informational
+  only - expiry is predictable with timer addons, so near-zero reapplies are
+  normal; the bot tell is a tight cluster, not a low floor.
+- **Cast cadence**: successful casts per minute plus the spacing between
+  consecutive casts (median and interquartile range, gaps over 10s excluded).
+  Server-visible casts only, so figures are far below addon-style APM; compare
+  players against each other, and look for near-zero gap spread (scripted
+  chains have inhumanly regular timing).
+- **Failed casts** from sniffing outbound `SMSG_CAST_FAILED`: only verdicts the
+  client cannot predict reach the server (nothing to dispel, line of sight,
+  facing/range on macro casts), so a dispel bot firing blind stands out.
+  Attempts the client rejects locally (range on a button press, cooldown) never
+  produce a packet and stay invisible.
 - **Facing behaviour** from the periodic position/orientation samples plus the
   target's position/orientation captured on every cast row (for behind-arc
   abilities like Shred): facing scripts snap onto their attacker within one
@@ -205,6 +222,8 @@ Event types:
 | `3`  | Cast fired    | -                                          |
 | `4`  | Aura applied  | dispel type (`0` for non-dispellable CC such as stuns); dispellable and loss-of-control auras on players are recorded; actor is the aura target, `target_guid` the caster |
 | `5`  | Position sample | - (`target_guid` is the player's current selection) |
+| `6`  | Aura removed  | `AuraRemoveMode` (`3` dispelled, `4` expired, ...); same aura kinds as type `4`, actor is the aura target, `target_guid` the caster |
+| `7`  | Cast failed   | `SpellCastResult` the server rejected the cast with (e.g. `86` nothing to dispel) |
 
 GMs and spectators are never recorded, and the arena preparation phase (before
 the gates open) is skipped. By default only rated matches are logged
@@ -234,9 +253,11 @@ high rating), and a player is *flagged* with at least
   `.support arena team <arenaTeamId> [count]` lists the recorded matches a given
   rated arena team played (unrated matches have no team id);
   `.support arena check <matchId>` prints per-player statistics for one match
-  (interrupt, dispel and CC-break reaction counts/min/median, fake casts thrown
-  and bitten, average latency) and marks flagged players. Running matches are
-  analyzed from the live buffer.
+  (interrupt, dispel, CC-break and trinket-answer reaction counts/min/median,
+  DoT reapply times, cast cadence, failed casts, fake casts thrown and bitten,
+  average latency) and marks flagged players. Only the four reaction categories
+  feed the flag; DoT reapplies, cadence and failed casts are informational.
+  Running matches are analyzed from the live buffer.
 - With `ArenaTelemetry.AutoCheck` enabled, every recorded match is analyzed
   when it ends - on its in-memory events, before the DB write - and flagged
   players are logged under `module.enhancedsupport` and relayed to Discord via
@@ -296,7 +317,7 @@ Examples: `.support keyword add wowgold`, `.support list keywords`,
 | `EnhancedSupport.LootFilter.LevelGap` | `0`      | Log loot whose required level exceeds the looter's level by at least this gap; `0` disables |
 | `EnhancedSupport.LootFilter.MaxLevel` | `0`      | Cap the loot check to looters at or below this level; `0` applies to all levels |
 | `EnhancedSupport.EmailFilter.Enable` | `1`       | Master switch for the account email-pattern check at character creation; runs once at least one pattern is configured |
-| `EnhancedSupport.ArenaTelemetry.Enable` | `0`   | Record arena combat telemetry (casts, cancels, dispellable auras, position samples) to `enhanced_support_arena_events` for offline cheat detection |
+| `EnhancedSupport.ArenaTelemetry.Enable` | `0`   | Record arena combat telemetry (casts, cancels, failed casts, aura applies/removes, position samples) to `enhanced_support_arena_events` for offline cheat detection |
 | `EnhancedSupport.ArenaTelemetry.RatedOnly` | `1` | Record rated matches only; `0` also records skirmishes |
 | `EnhancedSupport.ArenaTelemetry.PositionSampleMs` | `500` | Interval between position/orientation samples (min 100); `0` disables sampling, cast/aura events remain |
 | `EnhancedSupport.ArenaTelemetry.RetentionDays` | `30` | Purge events older than this on startup; `0` keeps everything |

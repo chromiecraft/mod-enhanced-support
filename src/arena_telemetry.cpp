@@ -24,18 +24,23 @@
 #include "Log.h"
 #include "Map.h"
 #include "ObjectAccessor.h"
+#include "Opcodes.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include "SharedDefines.h"
 #include "Spell.h"
 #include "SpellAuras.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "StringFormat.h"
+#include "WorldPacket.h"
 #include "WorldSession.h"
 
 #include <algorithm>
 #include <chrono>
+#include <map>
 #include <mutex>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
@@ -67,6 +72,8 @@ namespace
         ARENA_EVENT_AURA_APPLY  = 4, // dispellable or controlling aura landed on a player; extra = dispel
                                      // type (0 for non-dispellable CC like stuns). Dispel/CC-break-bot stimulus.
         ARENA_EVENT_POSITION    = 5, // periodic position/orientation sample, for facing analysis
+        ARENA_EVENT_AURA_REMOVE = 6, // recorded aura left the player; extra = AuraRemoveMode. DoT-reapply stimulus.
+        ARENA_EVENT_CAST_FAILED = 7, // server rejected a cast (SMSG_CAST_FAILED); extra = SpellCastResult
     };
 
     // Loss-of-control mechanics whose aura applications are recorded as stimuli
@@ -346,6 +353,15 @@ namespace
             std::vector<int32> interruptReactions;
             std::vector<int32> dispelReactions;
             std::vector<int32> ccBreakReactions;
+            std::vector<int32> trinketCCReactions;
+            std::vector<int32> dotReapplies;
+            uint32 casts = 0;
+            uint64 lastCastMs = 0;
+            std::vector<int32> castGaps;
+            uint32 failedCasts = 0;
+            uint32 failedNoDispel = 0;
+            uint32 failedLos = 0;
+            uint32 failedRange = 0;
             uint32 fakeCasts = 0;
             uint32 fakeCastBites = 0;
             uint64 latencySum = 0;
@@ -367,6 +383,35 @@ namespace
         std::unordered_map<uint32 /*guidLow*/, ControlStimulus> lastControl;
         std::unordered_map<uint32 /*guidLow*/, PlayerAgg> players;
 
+        // Open DoT windows: a periodic-damage aura fell off a player (expired or
+        // dispelled); the caster's next cast of that spell on the same target is
+        // the reapply. Keyed (victim, caster, spell).
+        std::map<std::tuple<uint32, uint32, uint32>, uint64> openDots;
+
+        // Last CC-removal/immunity cast per player, for measuring how fast an
+        // enemy answers the trinket with fresh CC. Consumed on match.
+        std::unordered_map<uint32 /*guidLow*/, uint64> lastBreakMs;
+
+        // Cast-time CC counts from its cast start (a poly pre-cast before the
+        // trinket never matches, its start predates the stimulus); instant CC
+        // counts from its GO row.
+        auto const matchTrinketCC = [&](ArenaEventRow const& row, PlayerAgg& actor, uint32 victimLow)
+        {
+            auto it = lastBreakMs.find(victimLow);
+            if (it == lastBreakMs.end())
+                return;
+
+            auto victim = players.find(victimLow);
+            if (victim == players.end() || victim->second.team == actor.team)
+                return;
+
+            if (row.timeMs >= it->second && row.timeMs - it->second <= 5000)
+            {
+                actor.trinketCCReactions.push_back(AdjustedReactionMs(it->second, row.timeMs, row.latencyMs));
+                lastBreakMs.erase(it);
+            }
+        };
+
         for (ArenaEventRow const& row : rows)
         {
             PlayerAgg& actor = players[row.actorGuid];
@@ -380,6 +425,12 @@ namespace
                     cast.startMs = row.timeMs;
                     cast.castTimeMs = row.extra;
                     cast.open = true;
+
+                    ObjectGuid const target(row.targetGuid);
+                    if (target.IsPlayer())
+                        if (SpellInfo const* startInfo = sSpellMgr->GetSpellInfo(row.spellId))
+                            if (startInfo->GetAllEffectsMechanicMask() & CONTROL_MECHANIC_MASK)
+                                matchTrinketCC(row, actor, target.GetCounter());
                     break;
                 }
                 case ARENA_EVENT_CAST_CANCEL:
@@ -407,10 +458,52 @@ namespace
                             lastControl[row.actorGuid] = { row.timeMs, ccMask };
                     break;
                 }
+                case ARENA_EVENT_AURA_REMOVE:
+                {
+                    // Only expiry and dispel open a reapply window; death or a
+                    // manual cancel is not a stimulus the DoT owner reacts to.
+                    if (row.extra != AURA_REMOVE_BY_EXPIRE && row.extra != AURA_REMOVE_BY_ENEMY_SPELL)
+                        break;
+
+                    SpellInfo const* auraInfo = sSpellMgr->GetSpellInfo(row.spellId);
+                    if (!auraInfo || !auraInfo->HasAura(SPELL_AURA_PERIODIC_DAMAGE))
+                        break;
+
+                    ObjectGuid const caster(row.targetGuid);
+                    if (caster.IsPlayer())
+                        openDots[{ row.actorGuid, caster.GetCounter(), row.spellId }] = row.timeMs;
+                    break;
+                }
+                case ARENA_EVENT_CAST_FAILED:
+                {
+                    ++actor.failedCasts;
+                    switch (row.extra)
+                    {
+                        case SPELL_FAILED_NOTHING_TO_DISPEL:
+                            ++actor.failedNoDispel;
+                            break;
+                        case SPELL_FAILED_LINE_OF_SIGHT:
+                            ++actor.failedLos;
+                            break;
+                        case SPELL_FAILED_OUT_OF_RANGE:
+                        case SPELL_FAILED_UNIT_NOT_INFRONT:
+                            ++actor.failedRange;
+                            break;
+                        default:
+                            break;
+                    }
+                    break;
+                }
                 case ARENA_EVENT_CAST_GO:
                 {
                     actor.latencySum += row.latencyMs;
                     ++actor.latencyCount;
+
+                    ++actor.casts;
+                    // Gaps over 10s are downtime (dead, drinking, pillared), not cadence.
+                    if (actor.lastCastMs != 0 && row.timeMs >= actor.lastCastMs && row.timeMs - actor.lastCastMs <= 10000)
+                        actor.castGaps.push_back(static_cast<int32>(row.timeMs - actor.lastCastMs));
+                    actor.lastCastMs = row.timeMs;
 
                     SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(row.spellId);
                     if (!spellInfo)
@@ -432,6 +525,8 @@ namespace
                     // on match, so one CC counts one response.
                     if (uint64 const breakMask = BreakMechanicMask(spellInfo))
                     {
+                        lastBreakMs[row.actorGuid] = row.timeMs;
+
                         auto cc = lastControl.find(row.actorGuid);
                         if (cc != lastControl.end() && (cc->second.mechanicMask & breakMask)
                             && row.timeMs >= cc->second.timeMs && row.timeMs - cc->second.timeMs <= 8000)
@@ -446,6 +541,19 @@ namespace
                         break;
 
                     uint32 const targetLow = target.GetCounter();
+
+                    if ((spellInfo->GetAllEffectsMechanicMask() & CONTROL_MECHANIC_MASK) && spellInfo->CalcCastTime() == 0)
+                        matchTrinketCC(row, actor, targetLow);
+
+                    if (spellInfo->HasAura(SPELL_AURA_PERIODIC_DAMAGE))
+                    {
+                        auto dot = openDots.find({ targetLow, row.actorGuid, row.spellId });
+                        if (dot != openDots.end() && row.timeMs >= dot->second && row.timeMs - dot->second <= 15000)
+                        {
+                            actor.dotReapplies.push_back(AdjustedReactionMs(dot->second, row.timeMs, row.latencyMs));
+                            openDots.erase(dot);
+                        }
+                    }
 
                     if (spellInfo->HasEffect(SPELL_EFFECT_INTERRUPT_CAST))
                     {
@@ -479,6 +587,8 @@ namespace
             }
         }
 
+        uint64 const matchDurationMs = rows.empty() ? 0 : rows.back().timeMs - rows.front().timeMs;
+
         std::vector<EnhancedSupport::ArenaTelemetryPlayerReport> reports;
         reports.reserve(players.size());
         for (auto& [guidLow, agg] : players)
@@ -489,9 +599,19 @@ namespace
             report.interrupts = static_cast<uint32>(agg.interruptReactions.size());
             report.dispels = static_cast<uint32>(agg.dispelReactions.size());
             report.ccBreaks = static_cast<uint32>(agg.ccBreakReactions.size());
+            report.trinketCCs = static_cast<uint32>(agg.trinketCCReactions.size());
+            report.dotReapplies = static_cast<uint32>(agg.dotReapplies.size());
             report.fakeCasts = agg.fakeCasts;
             report.fakeCastBites = agg.fakeCastBites;
             report.avgLatencyMs = agg.latencyCount != 0 ? static_cast<uint32>(agg.latencySum / agg.latencyCount) : 0;
+
+            report.casts = agg.casts;
+            if (matchDurationMs >= 30000)
+                report.apm = static_cast<int32>(agg.casts * 60000 / matchDurationMs);
+            report.failedCasts = agg.failedCasts;
+            report.failedNothingToDispel = agg.failedNoDispel;
+            report.failedLos = agg.failedLos;
+            report.failedRange = agg.failedRange;
 
             for (int32 reaction : agg.interruptReactions)
                 if (reaction <= static_cast<int32>(_suspectReactionMs))
@@ -502,6 +622,12 @@ namespace
             for (int32 reaction : agg.ccBreakReactions)
                 if (reaction <= static_cast<int32>(_suspectReactionMs))
                     ++report.fastCCBreaks;
+            for (int32 reaction : agg.trinketCCReactions)
+                if (reaction <= static_cast<int32>(_suspectReactionMs))
+                    ++report.fastTrinketCCs;
+            for (int32 reaction : agg.dotReapplies)
+                if (reaction <= static_cast<int32>(_suspectReactionMs))
+                    ++report.fastDotReapplies;
 
             report.medianInterruptMs = MedianOf(agg.interruptReactions);
             report.minInterruptMs = agg.interruptReactions.empty() ? -1 : agg.interruptReactions.front();
@@ -509,9 +635,19 @@ namespace
             report.minDispelMs = agg.dispelReactions.empty() ? -1 : agg.dispelReactions.front();
             report.medianCCBreakMs = MedianOf(agg.ccBreakReactions);
             report.minCCBreakMs = agg.ccBreakReactions.empty() ? -1 : agg.ccBreakReactions.front();
+            report.medianTrinketCCMs = MedianOf(agg.trinketCCReactions);
+            report.minTrinketCCMs = agg.trinketCCReactions.empty() ? -1 : agg.trinketCCReactions.front();
+            report.medianDotReapplyMs = MedianOf(agg.dotReapplies);
+            report.minDotReapplyMs = agg.dotReapplies.empty() ? -1 : agg.dotReapplies.front();
 
-            uint32 const total = report.interrupts + report.dispels + report.ccBreaks;
-            uint32 const fast = report.fastInterrupts + report.fastDispels + report.fastCCBreaks;
+            report.medianCastGapMs = MedianOf(agg.castGaps);
+            if (agg.castGaps.size() >= 4)
+                report.castGapIqrMs = agg.castGaps[agg.castGaps.size() * 3 / 4] - agg.castGaps[agg.castGaps.size() / 4];
+
+            // DoT reapplies never feed the flag: expiry is predictable (timer
+            // addons), so near-zero reapply times are normal for good players.
+            uint32 const total = report.interrupts + report.dispels + report.ccBreaks + report.trinketCCs;
+            uint32 const fast = report.fastInterrupts + report.fastDispels + report.fastCCBreaks + report.fastTrinketCCs;
             report.suspicious = fast >= _suspectMinEvents && fast * 100 >= total * _suspectPercent;
 
             reports.push_back(report);
@@ -545,23 +681,27 @@ namespace
             LOG_INFO("module.enhancedsupport",
                 "ArenaTelemetry: match {} ({}v{}{}) flagged {} ({}) - interrupts {} (fast {}, min {}ms, median {}ms), "
                 "dispels {} (fast {}, min {}ms, median {}ms), CC breaks {} (fast {}, min {}ms, median {}ms), "
+                "CC after trinket {} (fast {}, min {}ms, median {}ms), "
                 "jukes bitten {}, latency ~{}ms",
                 bg->GetInstanceID(), static_cast<uint32>(bg->GetArenaType()), static_cast<uint32>(bg->GetArenaType()), bg->isRated() ? ", rated" : "",
                 name, report.guidLow,
                 report.interrupts, report.fastInterrupts, report.minInterruptMs, report.medianInterruptMs,
                 report.dispels, report.fastDispels, report.minDispelMs, report.medianDispelMs,
                 report.ccBreaks, report.fastCCBreaks, report.minCCBreakMs, report.medianCCBreakMs,
+                report.trinketCCs, report.fastTrinketCCs, report.minTrinketCCMs, report.medianTrinketCCMs,
                 report.fakeCastBites, report.avgLatencyMs);
 
 #ifdef HAS_CHAT_TRANSMITTER
             lines += Acore::StringFormat(
                 "\n👤 **{}** (GUID {}) — interrupts {} ({} fast, min {}ms, median {}ms) | "
                 "dispels {} ({} fast, min {}ms, median {}ms) | "
-                "CC breaks {} ({} fast, min {}ms, median {}ms) | jukes bitten {} | latency ~{}ms",
+                "CC breaks {} ({} fast, min {}ms, median {}ms) | "
+                "CC after trinket {} ({} fast, min {}ms, median {}ms) | jukes bitten {} | latency ~{}ms",
                 name, report.guidLow,
                 report.interrupts, report.fastInterrupts, report.minInterruptMs, report.medianInterruptMs,
                 report.dispels, report.fastDispels, report.minDispelMs, report.medianDispelMs,
                 report.ccBreaks, report.fastCCBreaks, report.minCCBreakMs, report.medianCCBreakMs,
+                report.trinketCCs, report.fastTrinketCCs, report.minTrinketCCMs, report.medianTrinketCCMs,
                 report.fakeCastBites, report.avgLatencyMs);
 #endif
         }
@@ -744,16 +884,18 @@ public:
     }
 };
 
-// Records dispellable and loss-of-control auras landing on arena players - the
-// stimuli dispel and CC-break bots react to (roots/fears for dispels; stuns and
-// fears for trinket / Berserker Rage style breaks). The row is written from the
-// aura target's perspective: actor = the player the aura landed on, target_guid
-// = the caster's raw GUID.
+// Records dispellable and loss-of-control auras landing on and leaving arena
+// players - the stimuli dispel, CC-break and DoT-reapply bots react to
+// (roots/fears for dispels; stuns and fears for trinket / Berserker Rage style
+// breaks; a DoT expiring or being dispelled for reapply timing). Rows are
+// written from the aura target's perspective: actor = the player the aura is
+// on, target_guid = the caster's raw GUID.
 class EnhancedSupportArenaAuraTelemetry : public UnitScript
 {
 public:
     EnhancedSupportArenaAuraTelemetry() : UnitScript("EnhancedSupportArenaAuraTelemetry", true, {
-        UNITHOOK_ON_AURA_APPLY
+        UNITHOOK_ON_AURA_APPLY,
+        UNITHOOK_ON_AURA_REMOVE
     }) { }
 
     void OnAuraApply(Unit* unit, Aura* aura) override
@@ -774,6 +916,68 @@ public:
         if (Battleground* bg = GetTrackedArena(player))
             BufferEvent(bg, player, ARENA_EVENT_AURA_APPLY, spellInfo->Id,
                 aura->GetCasterGUID(), spellInfo->Dispel);
+    }
+
+    // Same aura kinds as OnAuraApply, so every recorded application has its
+    // removal; extra carries the AuraRemoveMode (expire, dispel, death, ...).
+    void OnAuraRemove(Unit* unit, AuraApplication* aurApp, AuraRemoveMode mode) override
+    {
+        Player* player = unit->ToPlayer();
+        if (!player)
+            return;
+
+        Aura const* aura = aurApp->GetBase();
+        SpellInfo const* spellInfo = aura->GetSpellInfo();
+        if (!spellInfo)
+            return;
+
+        if (spellInfo->Dispel == DISPEL_NONE && !(spellInfo->GetAllEffectsMechanicMask() & CONTROL_MECHANIC_MASK))
+            return;
+
+        if (Battleground* bg = GetTrackedArena(player))
+            BufferEvent(bg, player, ARENA_EVENT_AURA_REMOVE, spellInfo->Id,
+                aura->GetCasterGUID(), mode);
+    }
+};
+
+// Records server-rejected casts by sniffing outbound SMSG_CAST_FAILED. Only
+// verdicts the client cannot predict reach the server (nothing to dispel, line
+// of sight, immunity, facing) - a dispel bot firing blind shows up here.
+// Attempts the client rejects locally (range on a normal button press,
+// cooldown, resource) never produce a packet and stay invisible.
+class EnhancedSupportArenaCastFailTelemetry : public ServerScript
+{
+public:
+    EnhancedSupportArenaCastFailTelemetry() : ServerScript("EnhancedSupportArenaCastFailTelemetry", {
+        SERVERHOOK_CAN_PACKET_SEND
+    }) { }
+
+    bool CanPacketSend(WorldSession* session, WorldPacket const& packet) override
+    {
+        // Layout (Spell::WriteCastResultInfo): uint8 castCount, uint32 spellId,
+        // uint8 result, then optional per-result data.
+        if (packet.GetOpcode() != SMSG_CAST_FAILED || packet.size() < 6)
+            return true;
+
+        Player* player = session->GetPlayer();
+        if (!player)
+            return true;
+
+        Battleground* bg = GetTrackedArena(player);
+        if (!bg)
+            return true;
+
+        uint8 const* data = packet.contents();
+        uint32 const spellId = uint32(data[1]) | (uint32(data[2]) << 8) | (uint32(data[3]) << 16) | (uint32(data[4]) << 24);
+        uint8 const result = data[5];
+
+        // Suppressed errors come from triggered/internal casts, not from a
+        // player-initiated attempt.
+        if (result == SPELL_FAILED_DONT_REPORT)
+            return true;
+
+        BufferEvent(bg, player, ARENA_EVENT_CAST_FAILED, spellId, ObjectGuid::Empty, result);
+        return true;
     }
 };
 
@@ -901,6 +1105,7 @@ void AddEnhancedSupportArenaTelemetryScripts()
 {
     new EnhancedSupportArenaSpellTelemetry();
     new EnhancedSupportArenaAuraTelemetry();
+    new EnhancedSupportArenaCastFailTelemetry();
     new EnhancedSupportArenaPositionSampler();
     new EnhancedSupportArenaTelemetryFlusher();
     new EnhancedSupportArenaTelemetryWorldScript();

@@ -367,8 +367,10 @@ EnhancedSupport.EmailFilter.Enable = 1
 #                     DB table `enhanced_support_arena_events`, for offline cheat detection
 #                     (input automation such as AHK interrupt/dispel bots). Logged events:
 #                     cast bars appearing, cast cancels (fake casts), spells firing,
-#                     dispellable and loss-of-control auras landing on players, and periodic
-#                     position/orientation samples. Log-only: gameplay is never altered, and no verdicts are made
+#                     server-rejected casts (nothing to dispel, line of sight, ...),
+#                     dispellable and loss-of-control auras landing on and leaving players,
+#                     and periodic position/orientation samples. Log-only: gameplay is
+#                     never altered, and no verdicts are made
 #                     in real time - the data is meant for offline statistical analysis
 #                     (reaction-time distributions, fake-cast responses, facing behaviour).
 #                     GMs and spectators are not recorded; the arena preparation phase
@@ -432,9 +434,13 @@ EnhancedSupport.ArenaTelemetry.AutoCheck = 0
 #    EnhancedSupport.ArenaTelemetry.Suspect.ReactionMs
 #        Description: A reaction counts as suspiciously fast when it is at or below this many
 #                     milliseconds after subtracting the player's latency. Reactions measured:
-#                     enemy cast bar -> interrupt, aura application -> dispel, and CC landing
-#                     on you -> removal/immunity cast (PvP trinket, Berserker Rage, ...).
+#                     enemy cast bar -> interrupt, aura application -> dispel, CC landing
+#                     on you -> removal/immunity cast (PvP trinket, Berserker Rage, ...),
+#                     and enemy trinket/immunity cast -> fresh CC on that enemy.
 #                     Human reactions to visual cues sit around 200-500ms even at high rating.
+#                     DoT reapply times, cast cadence and failed casts are also reported by
+#                     the analysis but never flag: DoT expiry is predictable with timer
+#                     addons, and cast volume varies by spec.
 #        Default:     180
 #
 #    EnhancedSupport.ArenaTelemetry.Suspect.MinEvents
