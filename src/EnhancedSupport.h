@@ -173,6 +173,15 @@ namespace EnhancedSupport
     // of a still-running match). Synchronous; intended for the .support command.
     std::vector<ArenaTelemetryPlayerReport> CheckArenaMatch(uint32 matchId);
 
+    // Analyzes a match recorded by mod-arena-replay by decoding its stored
+    // packet stream (character_arena_replays) into telemetry events and running
+    // the same analysis as CheckArenaMatch. Coarser than live telemetry:
+    // timestamps have world-tick resolution and are not latency-adjusted, and
+    // the failed-cast and juke figures are always zero (not recoverable from
+    // packet data). Returns empty and sets error when the replay is missing or
+    // unusable.
+    std::vector<ArenaTelemetryPlayerReport> CheckArenaReplay(uint32 replayId, std::string& error);
+
     // Highest valid mail filter action value.
     uint8 GetMaxMailFilterAction();
 

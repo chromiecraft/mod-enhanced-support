@@ -273,6 +273,32 @@ This is log-only evidence gathering: no gameplay is altered and no automated
 punishment is issued. Client-side scanning cannot see AHK (it only sends
 keystrokes), which is why behavioural telemetry is the detection layer here.
 
+#### mod-arena-replay integration
+
+When [mod-arena-replay](https://github.com/azerothcore/mod-arena-replay) is
+installed (detected at startup by its `character_arena_replays` table; no build
+dependency), its data plugs into the analysis from both directions:
+
+- `.support arena replay <replayId>` decodes a stored replay's packet stream
+  (spell start/go/failure and aura updates) into telemetry events and runs the
+  same per-player analysis. This covers matches recorded before this module's
+  telemetry existed or while it is disabled, including unrated matches when the
+  replay module records them.
+- With `ArenaTelemetry.AutoCheck` on, a flagged match is resolved to its replay
+  row (matched by map, arena type, a flagged player and recency, a few seconds
+  after match end since the replay is saved asynchronously) and the log line
+  and Discord alert then include the replay id, so a GM can watch the flagged
+  match at the replay NPC.
+
+Replay-decoded numbers are coarser than live telemetry: replay timestamps
+advance once per world update (reactions are quantized to tick length, roughly
+tens of milliseconds), no latency data exists so reactions are not
+latency-adjusted (they only ever look *slower*, never faster), aura refreshes
+count as extra apply stimuli, and failed casts and jukes are not recoverable
+from packet data at all. Interrupts, dispels, CC breaks, trinket-answer CC,
+DoT reapplies and cast cadence all work; judge the distributions rather than
+single values.
+
 ### Startup Discord notice
 
 When enabled, posts a decorated Discord message once the world server has
@@ -302,6 +328,7 @@ All commands live under `.support` and work in-game and from the server console.
 | `.support arena matches [count]`         | Game Master   | Lists the most recently recorded arena matches (id, size, start, duration, event count). `count` defaults to 10, max 50. |
 | `.support arena team <arenaTeamId> [count]` | Game Master | Lists the recorded matches a given rated arena team took part in, newest first. `count` defaults to 10, max 50. Only rated matches carry a team id. |
 | `.support arena check <matchId>`         | Game Master   | Analyzes one recorded match and prints per-player reaction statistics, marking players who cross the suspect thresholds. |
+| `.support arena replay <replayId>`       | Game Master   | Same analysis on a match stored by mod-arena-replay, decoded from its packet stream. Coarser timing (world-tick resolution, no latency data); failed casts and jukes unavailable. |
 
 Examples: `.support keyword add wowgold`, `.support list keywords`,
 `.support list bans` (module bans), `.support list bans 50 GM_Name`.

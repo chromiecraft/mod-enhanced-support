@@ -16,6 +16,8 @@
  */
 
 #include "EnhancedSupport.h"
+#include "AsyncCallbackProcessor.h"
+#include "Base32.h"
 #include "Battleground.h"
 #include "CharacterCache.h"
 #include "Config.h"
@@ -26,6 +28,7 @@
 #include "ObjectAccessor.h"
 #include "Opcodes.h"
 #include "Player.h"
+#include "QueryCallback.h"
 #include "ScriptMgr.h"
 #include "SharedDefines.h"
 #include "Spell.h"
@@ -40,6 +43,7 @@
 #include <chrono>
 #include <map>
 #include <mutex>
+#include <sstream>
 #include <tuple>
 #include <unordered_map>
 #include <vector>
@@ -100,6 +104,32 @@ namespace
     uint32 _suspectReactionMs = 180;
     uint32 _suspectMinEvents = 4;
     uint32 _suspectPercent = 60;
+
+    // mod-arena-replay integration (soft data dependency, detected at startup
+    // by the presence of its character_arena_replays table): its stored packet
+    // streams can be decoded into telemetry events and run through the same
+    // analysis, and auto-check alerts link the flagged match to its replay so
+    // a GM can watch it.
+    bool _replayDataAvailable = false;
+
+    // Delay before resolving a flagged match to its replay row. mod-arena-replay
+    // saves the replay from the same battleground-end hook via an async DB
+    // write, so an immediate lookup would race the insert.
+    constexpr uint32 REPLAY_LOOKUP_DELAY_MS = 5000;
+
+    struct PendingReplayLookup
+    {
+        uint32 matchId;
+        uint32 mapId;
+        uint8 arenaType;
+        uint32 flaggedGuidLow;  // any flagged player, used to match the replay row
+        std::string note;       // Discord alert body, held until the replay id is known
+        int32 delayMs;
+    };
+
+    // Both touched from the world thread only (battleground end + world update).
+    std::vector<PendingReplayLookup> _pendingReplayLookups;
+    QueryCallbackProcessor _replayQueryProcessor;
 
     // One buffered row of enhanced_support_arena_events (all-numeric).
     struct ArenaEventRow
@@ -375,7 +405,9 @@ namespace
             uint64 mechanicMask = 0;
         };
 
-        std::sort(rows.begin(), rows.end(),
+        // Stable: replay-decoded rows share tick-resolution timestamps, and for
+        // equal times the recorded stream order is the causal order.
+        std::stable_sort(rows.begin(), rows.end(),
             [](ArenaEventRow const& a, ArenaEventRow const& b) { return a.timeMs < b.timeMs; });
 
         std::unordered_map<uint32 /*guidLow*/, OpenCast> casts;
@@ -656,6 +688,356 @@ namespace
         return reports;
     }
 
+    // ---- mod-arena-replay decoding ----
+    //
+    // mod-arena-replay records the raw server-to-client packets sent to one
+    // player per team, framed as {size, timestamp, opcode, payload} and Base32-
+    // encoded into character_arena_replays.contents. Decoding the spell and
+    // aura packets back into telemetry rows lets the same analysis run on
+    // matches this module never recorded live. Known differences from live
+    // telemetry:
+    //  - timestamps are the battleground's elapsed-time counter, which advances
+    //    once per world update, so reactions are quantized to tick length;
+    //  - packets carry no session latency, reactions are not latency-adjusted;
+    //  - every broadcast packet appears once per observer, deduplicated here by
+    //    (opcode, actor, spell, cast counter / aura slot) within a short window;
+    //  - a self-cancelled cast and an interrupted one both arrive as
+    //    SMSG_SPELL_FAILURE, so juke stats stay empty;
+    //  - SMSG_CAST_FAILED carries no caster guid, so failed-cast stats stay
+    //    empty too;
+    //  - an aura refresh re-sends SMSG_AURA_UPDATE, so aura-apply stimuli are
+    //    slightly overcounted compared to live capture.
+
+    std::unordered_map<uint32 /*guidLow*/, uint8 /*team*/> ParseReplayTeams(
+        std::string const& winnerGuids, std::string const& loserGuids)
+    {
+        std::unordered_map<uint32, uint8> teams;
+        auto const addAll = [&teams](std::string const& list, uint8 team)
+        {
+            std::stringstream stream(list);
+            std::string token;
+            while (std::getline(stream, token, ','))
+            {
+                try
+                {
+                    // Stored as raw player GUIDs, whose high bits are zero, so
+                    // the value is the low guid.
+                    teams[static_cast<uint32>(std::stoul(token))] = team;
+                }
+                catch (...) { }
+            }
+        };
+        addAll(winnerGuids, 0);
+        addAll(loserGuids, 1);
+        return teams;
+    }
+
+    // Decodes one replay's framed packet stream into telemetry rows. Only the
+    // opcodes the analyzer consumes are parsed; every other frame is skipped.
+    // Position samples are not reconstructed (the analyzer ignores them).
+    std::vector<ArenaEventRow> ParseReplayPackets(std::vector<uint8> const& stream,
+        std::unordered_map<uint32, uint8> const& teamByGuid, uint32 mapId, uint8 arenaType, bool rated)
+    {
+        std::vector<ArenaEventRow> rows;
+
+        ByteBuffer buf;
+        buf.append(stream.data(), stream.size());
+
+        // Copies of the same broadcast (one per observer) land in the same
+        // world tick; anything with the same key inside the window is a copy.
+        std::map<std::tuple<uint16, uint64, uint32, uint32>, uint64> lastSeen;
+        auto const isDuplicate = [&lastSeen](uint16 opcode, uint64 actorRaw, uint32 spellId, uint32 salt, uint64 timeMs)
+        {
+            auto const key = std::make_tuple(opcode, actorRaw, spellId, salt);
+            auto it = lastSeen.find(key);
+            if (it != lastSeen.end() && timeMs >= it->second && timeMs - it->second <= 400)
+                return true;
+            lastSeen[key] = timeMs;
+            return false;
+        };
+
+        // Aura slots currently holding a recorded aura, to resolve the
+        // spell-less remove frames; value = {spellId, caster raw guid}.
+        std::map<std::pair<uint64, uint8>, std::pair<uint32, uint64>> auraSlots;
+
+        auto const emit = [&](uint64 timeMs, uint8 eventType, uint64 actorRaw, uint32 spellId,
+            uint64 targetRaw, uint32 extra)
+        {
+            ObjectGuid const actor(actorRaw);
+            if (!actor.IsPlayer())
+                return;
+
+            ArenaEventRow row{};
+            row.timeMs = timeMs;
+            row.mapId = mapId;
+            row.arenaType = arenaType;
+            row.rated = rated;
+            row.eventType = eventType;
+            row.actorGuid = actor.GetCounter();
+            auto team = teamByGuid.find(actor.GetCounter());
+            row.actorTeam = team != teamByGuid.end() ? team->second : 0;
+            row.spellId = spellId;
+            row.targetGuid = targetRaw;
+            row.extra = extra;
+            rows.push_back(row);
+        };
+
+        // Reads the leading part of a SpellCastTargets block (see
+        // SpellCastTargets::Write): target mask, then the packed unit guid.
+        auto const readTargetGuid = [](ByteBuffer& b) -> uint64
+        {
+            uint32 mask;
+            b >> mask;
+            uint64 target = 0;
+            if (mask & (TARGET_FLAG_UNIT | TARGET_FLAG_CORPSE_ALLY | TARGET_FLAG_GAMEOBJECT
+                | TARGET_FLAG_CORPSE_ENEMY | TARGET_FLAG_UNIT_MINIPET))
+                b.readPackGUID(target);
+            return target;
+        };
+
+        while (buf.rpos() + 10 <= buf.size())
+        {
+            uint32 payloadSize;
+            uint32 timestamp;
+            uint16 opcode;
+            buf >> payloadSize >> timestamp >> opcode;
+
+            size_t const payloadStart = buf.rpos();
+            if (payloadStart + payloadSize > buf.size())
+                break;
+
+            uint64 const timeMs = timestamp;
+
+            try
+            {
+                switch (opcode)
+                {
+                    // Layout: Spell::SendSpellStart.
+                    case SMSG_SPELL_START:
+                    {
+                        uint64 castItemRaw;
+                        uint64 casterRaw;
+                        buf.readPackGUID(castItemRaw);
+                        buf.readPackGUID(casterRaw);
+                        uint8 castCount;
+                        uint32 spellId;
+                        uint32 castFlags;
+                        int32 timer;
+                        buf >> castCount >> spellId >> castFlags >> timer;
+
+                        // CAST_FLAG_PENDING marks server-triggered casts (procs,
+                        // aura-triggered spells), which the live capture skips too.
+                        if (castFlags & CAST_FLAG_PENDING)
+                            break;
+
+                        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+                        if (!spellInfo || (timer <= 0 && !spellInfo->IsChanneled()))
+                            break;
+
+                        if (isDuplicate(opcode, casterRaw, spellId, castCount, timeMs))
+                            break;
+
+                        emit(timeMs, ARENA_EVENT_CAST_START, casterRaw, spellId,
+                            readTargetGuid(buf), static_cast<uint32>(std::max<int32>(timer, 0)));
+                        break;
+                    }
+                    // Layout: Spell::SendSpellGo + WriteSpellGoTargets.
+                    case SMSG_SPELL_GO:
+                    {
+                        uint64 castItemRaw;
+                        uint64 casterRaw;
+                        buf.readPackGUID(castItemRaw);
+                        buf.readPackGUID(casterRaw);
+                        uint8 castCount;
+                        uint32 spellId;
+                        uint32 castFlags;
+                        uint32 gameTime;
+                        buf >> castCount >> spellId >> castFlags >> gameTime;
+
+                        if (castFlags & CAST_FLAG_PENDING)
+                            break;
+
+                        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+                        if (!spellInfo || spellInfo->IsAutoRepeatRangedSpell())
+                            break;
+
+                        if (isDuplicate(opcode, casterRaw, spellId, castCount, timeMs))
+                            break;
+
+                        uint8 hits;
+                        buf >> hits;
+                        uint64 firstHit = 0;
+                        for (uint8 i = 0; i < hits; ++i)
+                        {
+                            uint64 hitGuid;
+                            buf >> hitGuid;
+                            if (firstHit == 0)
+                                firstHit = hitGuid;
+                        }
+
+                        uint8 misses;
+                        buf >> misses;
+                        for (uint8 i = 0; i < misses; ++i)
+                        {
+                            uint64 missGuid;
+                            uint8 missCondition;
+                            buf >> missGuid >> missCondition;
+                            if (missCondition == SPELL_MISS_REFLECT)
+                            {
+                                uint8 reflectResult;
+                                buf >> reflectResult;
+                            }
+                        }
+
+                        uint64 target = readTargetGuid(buf);
+                        if (target == 0)
+                            target = firstHit;
+
+                        emit(timeMs, ARENA_EVENT_CAST_GO, casterRaw, spellId, target, 0);
+                        break;
+                    }
+                    // Layout: Spell::SendInterrupted. Sent both when the caster
+                    // cancelled and when the cast was interrupted; the analyzer
+                    // only uses it to close an open cast, so extra = 0 (not by
+                    // self) is the safe choice for both.
+                    case SMSG_SPELL_FAILURE:
+                    {
+                        uint64 casterRaw;
+                        buf.readPackGUID(casterRaw);
+                        uint8 castCount;
+                        uint32 spellId;
+                        buf >> castCount >> spellId;
+
+                        if (isDuplicate(opcode, casterRaw, spellId, castCount, timeMs))
+                            break;
+
+                        emit(timeMs, ARENA_EVENT_CAST_CANCEL, casterRaw, spellId, 0, 0);
+                        break;
+                    }
+                    // Layout: AuraApplication::BuildUpdatePacket. UPDATE carries
+                    // one entry, UPDATE_ALL repeats entries to the payload end;
+                    // an entry with spell id 0 is a removal from that slot.
+                    case SMSG_AURA_UPDATE:
+                    case SMSG_AURA_UPDATE_ALL:
+                    {
+                        uint64 targetRaw;
+                        buf.readPackGUID(targetRaw);
+
+                        size_t const payloadEnd = payloadStart + payloadSize;
+                        while (buf.rpos() < payloadEnd)
+                        {
+                            uint8 slot;
+                            uint32 spellId;
+                            buf >> slot >> spellId;
+
+                            if (spellId == 0)
+                            {
+                                auto it = auraSlots.find({ targetRaw, slot });
+                                if (it == auraSlots.end())
+                                    continue;
+
+                                // The remove mode is not in the packet; EXPIRE
+                                // keeps DoT reapply windows opening (dispels
+                                // open them too, death rarely matters within
+                                // the 15s window).
+                                emit(timeMs, ARENA_EVENT_AURA_REMOVE, targetRaw,
+                                    it->second.first, it->second.second, AURA_REMOVE_BY_EXPIRE);
+                                auraSlots.erase(it);
+                                continue;
+                            }
+
+                            uint8 flags;
+                            uint8 level;
+                            uint8 stack;
+                            buf >> flags >> level >> stack;
+
+                            uint64 casterRaw = targetRaw;
+                            if (!(flags & AFLAG_CASTER))
+                                buf.readPackGUID(casterRaw);
+
+                            if (flags & AFLAG_DURATION)
+                            {
+                                uint32 maxDuration;
+                                uint32 duration;
+                                buf >> maxDuration >> duration;
+                            }
+
+                            SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+                            if (!spellInfo)
+                                continue;
+
+                            // Same aura kinds as the live capture: dispellable
+                            // or loss-of-control.
+                            if (spellInfo->Dispel == DISPEL_NONE
+                                && !(spellInfo->GetAllEffectsMechanicMask() & CONTROL_MECHANIC_MASK))
+                                continue;
+
+                            auraSlots[{ targetRaw, slot }] = { spellId, casterRaw };
+
+                            if (isDuplicate(SMSG_AURA_UPDATE, targetRaw, spellId, slot, timeMs))
+                                continue;
+
+                            emit(timeMs, ARENA_EVENT_AURA_APPLY, targetRaw, spellId,
+                                casterRaw, spellInfo->Dispel);
+                        }
+                        break;
+                    }
+                    default:
+                        break;
+                }
+            }
+            catch (ByteBufferException const&)
+            {
+                // Unexpected layout in this frame; skip it, the stream stays
+                // aligned because every frame carries its payload size.
+            }
+
+            buf.rpos(payloadStart + payloadSize);
+        }
+
+        return rows;
+    }
+
+    // Resolves a just-flagged match to its mod-arena-replay row (matched by map,
+    // arena type, a flagged player's guid and recency) and then emits the held-
+    // back log line and Discord alert with the replay id attached.
+    void StartReplayLookup(PendingReplayLookup lookup)
+    {
+        std::string const sql = Acore::StringFormat(
+            "SELECT id FROM character_arena_replays "
+            "WHERE mapId = {} AND arenaTypeId = {} AND timestamp >= NOW() - INTERVAL 10 MINUTE "
+            "AND (FIND_IN_SET('{}', REPLACE(winnerPlayerGuids, ' ', '')) "
+            "OR FIND_IN_SET('{}', REPLACE(loserPlayerGuids, ' ', ''))) "
+            "ORDER BY id DESC LIMIT 1",
+            lookup.mapId, static_cast<uint32>(lookup.arenaType),
+            lookup.flaggedGuidLow, lookup.flaggedGuidLow);
+
+        uint32 const matchId = lookup.matchId;
+        _replayQueryProcessor.AddCallback(CharacterDatabase.AsyncQuery(sql)
+            .WithCallback([matchId, note = std::move(lookup.note)](QueryResult result) mutable
+        {
+            uint32 const replayId = result ? result->Fetch()[0].Get<uint32>() : 0;
+            if (replayId != 0)
+                LOG_INFO("module.enhancedsupport",
+                    "ArenaTelemetry: flagged match {} is saved as arena replay {} - "
+                    "'.support arena replay {}' re-checks it, the replay NPC plays it back.",
+                    matchId, replayId, replayId);
+            else
+                LOG_INFO("module.enhancedsupport",
+                    "ArenaTelemetry: no arena replay found for flagged match {} "
+                    "(too short to save, or replay recording disabled).", matchId);
+
+#ifdef HAS_CHAT_TRANSMITTER
+            if (!note.empty())
+            {
+                if (replayId != 0)
+                    note += Acore::StringFormat("\n🎬 Watch it: replay **{}** at the replay NPC", replayId);
+                sChatTransmitter->QueueNotification("ChatFilter", note);
+            }
+#endif
+        }));
+    }
+
     std::string ResolvePlayerName(uint32 guidLow)
     {
         std::string name;
@@ -668,6 +1050,7 @@ namespace
     // a just-ended match. Log-only; no punishment is issued.
     void ReportSuspiciousPlayers(Battleground* bg, std::vector<EnhancedSupport::ArenaTelemetryPlayerReport> const& reports)
     {
+        uint32 firstFlaggedGuid = 0;
 #ifdef HAS_CHAT_TRANSMITTER
         std::string lines;
 #endif
@@ -675,6 +1058,9 @@ namespace
         {
             if (!report.suspicious)
                 continue;
+
+            if (firstFlaggedGuid == 0)
+                firstFlaggedGuid = report.guidLow;
 
             std::string const name = ResolvePlayerName(report.guidLow);
 
@@ -706,16 +1092,31 @@ namespace
 #endif
         }
 
+        if (firstFlaggedGuid == 0)
+            return;
+
+        std::string note;
 #ifdef HAS_CHAT_TRANSMITTER
-        if (!lines.empty())
+        note = Acore::StringFormat(
+            "🕵️ **Arena telemetry alert** — match {} ({}v{}{}), reactions ≤ {}ms after latency count as fast\n"
+            "Check with `.support arena check {}`{}",
+            bg->GetInstanceID(), static_cast<uint32>(bg->GetArenaType()), static_cast<uint32>(bg->GetArenaType()), bg->isRated() ? ", rated" : "",
+            _suspectReactionMs, bg->GetInstanceID(), lines);
+#endif
+
+        // With replay data present, the alert is held back until the match's
+        // replay id is resolved, so the Discord note can link straight to it.
+        if (_replayDataAvailable)
         {
-            std::string note = Acore::StringFormat(
-                "🕵️ **Arena telemetry alert** — match {} ({}v{}{}), reactions ≤ {}ms after latency count as fast\n"
-                "Check with `.support arena check {}`{}",
-                bg->GetInstanceID(), static_cast<uint32>(bg->GetArenaType()), static_cast<uint32>(bg->GetArenaType()), bg->isRated() ? ", rated" : "",
-                _suspectReactionMs, bg->GetInstanceID(), lines);
-            sChatTransmitter->QueueNotification("ChatFilter", note);
+            _pendingReplayLookups.push_back({ bg->GetInstanceID(), bg->GetMapId(),
+                bg->GetArenaType(), firstFlaggedGuid, std::move(note),
+                static_cast<int32>(REPLAY_LOOKUP_DELAY_MS) });
+            return;
         }
+
+#ifdef HAS_CHAT_TRANSMITTER
+        if (!note.empty())
+            sChatTransmitter->QueueNotification("ChatFilter", note);
 #endif
     }
 }
@@ -818,6 +1219,47 @@ namespace EnhancedSupport
             auto it = _matchBuffers.find(matchId);
             if (it != _matchBuffers.end())
                 rows = it->second;
+        }
+
+        return AnalyzeArenaRows(rows);
+    }
+
+    std::vector<ArenaTelemetryPlayerReport> CheckArenaReplay(uint32 replayId, std::string& error)
+    {
+        error.clear();
+
+        if (!_replayDataAvailable)
+        {
+            error = "character_arena_replays not found - is mod-arena-replay installed and its SQL applied?";
+            return {};
+        }
+
+        // Manual GM action on a single row; synchronous like CheckArenaMatch.
+        QueryResult result = CharacterDatabase.Query(
+            "SELECT contents, mapId, arenaTypeId, winnerTeamRating, loserTeamRating, "
+            "winnerPlayerGuids, loserPlayerGuids FROM character_arena_replays WHERE id = {}", replayId);
+        if (!result)
+        {
+            error = Acore::StringFormat("no arena replay with id {}", replayId);
+            return {};
+        }
+
+        Field* fields = result->Fetch();
+        auto stream = Acore::Encoding::Base32::Decode(fields[0].Get<std::string>());
+        if (!stream || stream->empty())
+        {
+            error = Acore::StringFormat("replay {} contains no decodable packet data", replayId);
+            return {};
+        }
+
+        bool const rated = fields[3].Get<uint32>() > 0 || fields[4].Get<uint32>() > 0;
+        std::vector<ArenaEventRow> rows = ParseReplayPackets(*stream,
+            ParseReplayTeams(fields[5].Get<std::string>(), fields[6].Get<std::string>()),
+            fields[1].Get<uint32>(), static_cast<uint8>(fields[2].Get<uint32>()), rated);
+        if (rows.empty())
+        {
+            error = Acore::StringFormat("replay {} contains no events the analyzer can use", replayId);
+            return {};
         }
 
         return AnalyzeArenaRows(rows);
@@ -1081,11 +1523,17 @@ class EnhancedSupportArenaTelemetryWorldScript : public WorldScript
 public:
     EnhancedSupportArenaTelemetryWorldScript() : WorldScript("EnhancedSupportArenaTelemetryWorldScript", {
         WORLDHOOK_ON_STARTUP,
+        WORLDHOOK_ON_UPDATE,
         WORLDHOOK_ON_SHUTDOWN
     }) { }
 
     void OnStartup() override
     {
+        _replayDataAvailable = bool(CharacterDatabase.Query("SHOW TABLES LIKE 'character_arena_replays'"));
+        if (_replayDataAvailable)
+            LOG_INFO("module.enhancedsupport",
+                "ArenaTelemetry: mod-arena-replay data found; replay analysis and alert replay links enabled.");
+
         if (_telemetryRetentionDays == 0)
             return;
 
@@ -1093,6 +1541,27 @@ public:
         CharacterDatabase.Execute("DELETE FROM enhanced_support_arena_events WHERE time_ms < {}", cutoff);
         LOG_INFO("module.enhancedsupport",
             "ArenaTelemetry: purging arena events older than {} day(s).", _telemetryRetentionDays);
+    }
+
+    void OnUpdate(uint32 diff) override
+    {
+        if (!_pendingReplayLookups.empty())
+        {
+            for (auto it = _pendingReplayLookups.begin(); it != _pendingReplayLookups.end();)
+            {
+                it->delayMs -= static_cast<int32>(diff);
+                if (it->delayMs > 0)
+                {
+                    ++it;
+                    continue;
+                }
+
+                StartReplayLookup(std::move(*it));
+                it = _pendingReplayLookups.erase(it);
+            }
+        }
+
+        _replayQueryProcessor.ProcessReadyCallbacks();
     }
 
     void OnShutdown() override

@@ -60,6 +60,7 @@ public:
             { "matches", HandleArenaMatchesCommand, SEC_GAMEMASTER, Console::Yes },
             { "team",    HandleArenaTeamCommand,    SEC_GAMEMASTER, Console::Yes },
             { "check",   HandleArenaCheckCommand,   SEC_GAMEMASTER, Console::Yes },
+            { "replay",  HandleArenaReplayCommand,  SEC_GAMEMASTER, Console::Yes },
         };
 
         static ChatCommandTable supportTable =
@@ -455,29 +456,17 @@ public:
         return true;
     }
 
-    // Analyzes one recorded match (running matches are analyzed from the live
-    // buffer) and prints per-player reaction statistics.
-    static bool HandleArenaCheckCommand(ChatHandler* handler, uint32 matchId)
+    // Shared printer for live-telemetry and replay-decoded reports; fromReplay
+    // drops the fields replay packet data cannot provide (failed casts, jukes,
+    // latency).
+    static void PrintArenaReports(ChatHandler* handler,
+        std::vector<EnhancedSupport::ArenaTelemetryPlayerReport>& reports, bool fromReplay)
     {
-        std::vector<EnhancedSupport::ArenaTelemetryPlayerReport> reports = EnhancedSupport::CheckArenaMatch(matchId);
-        if (reports.empty())
-        {
-            handler->PSendSysMessage("No telemetry recorded for match {}.", matchId);
-            handler->SetSentErrorMessage(true);
-            return false;
-        }
-
         std::sort(reports.begin(), reports.end(),
             [](EnhancedSupport::ArenaTelemetryPlayerReport const& a, EnhancedSupport::ArenaTelemetryPlayerReport const& b)
             {
                 return a.team != b.team ? a.team < b.team : a.guidLow < b.guidLow;
             });
-
-        handler->PSendSysMessage(
-            "Match {} telemetry ({} player(s)). Fast = reaction <= {}ms after subtracting latency; "
-            "flagged at >= {} fast reactions making up >= {}%:",
-            matchId, reports.size(), EnhancedSupport::GetArenaTelemetrySuspectReactionMs(),
-            EnhancedSupport::GetArenaTelemetrySuspectMinEvents(), EnhancedSupport::GetArenaTelemetrySuspectPercent());
 
         auto const reactionBlock = [](uint32 total, uint32 fast, int32 minMs, int32 medianMs) -> std::string
         {
@@ -521,6 +510,9 @@ public:
             }
             handler->PSendSysMessage("> Casts: {}", cadence);
 
+            if (fromReplay)
+                continue;
+
             if (report.failedCasts == 0)
                 handler->SendSysMessage("> Failed casts: none");
             else
@@ -530,10 +522,60 @@ public:
             handler->PSendSysMessage("> Jukes: thrown {}, bitten {}", report.fakeCasts, report.fakeCastBites);
             handler->PSendSysMessage("> Latency: ~{}ms", report.avgLatencyMs);
         }
+    }
+
+    // Analyzes one recorded match (running matches are analyzed from the live
+    // buffer) and prints per-player reaction statistics.
+    static bool HandleArenaCheckCommand(ChatHandler* handler, uint32 matchId)
+    {
+        std::vector<EnhancedSupport::ArenaTelemetryPlayerReport> reports = EnhancedSupport::CheckArenaMatch(matchId);
+        if (reports.empty())
+        {
+            handler->PSendSysMessage("No telemetry recorded for match {}.", matchId);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        handler->PSendSysMessage(
+            "Match {} telemetry ({} player(s)). Fast = reaction <= {}ms after subtracting latency; "
+            "flagged at >= {} fast reactions making up >= {}%:",
+            matchId, reports.size(), EnhancedSupport::GetArenaTelemetrySuspectReactionMs(),
+            EnhancedSupport::GetArenaTelemetrySuspectMinEvents(), EnhancedSupport::GetArenaTelemetrySuspectPercent());
+
+        PrintArenaReports(handler, reports, false);
 
         handler->SendSysMessage("DoT reapplies, cast cadence and failed casts are informational and never flag: "
             "DoT expiry is predictable with timer addons, and cast volume varies by spec. "
             "A scripted player shows a near-zero cast gap IQR and many 'nothing to dispel' failures.");
+        handler->SendSysMessage("Verdicts need several matches, not one: compare with this player's other matches before acting.");
+        return true;
+    }
+
+    // Analyzes a match recorded by mod-arena-replay: its stored packet stream is
+    // decoded into telemetry events and run through the same analysis, covering
+    // matches this module never recorded live.
+    static bool HandleArenaReplayCommand(ChatHandler* handler, uint32 replayId)
+    {
+        std::string error;
+        std::vector<EnhancedSupport::ArenaTelemetryPlayerReport> reports = EnhancedSupport::CheckArenaReplay(replayId, error);
+        if (reports.empty())
+        {
+            handler->PSendSysMessage("Cannot check replay {}: {}.", replayId, error);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        handler->PSendSysMessage(
+            "Replay {} analysis ({} player(s)), decoded from mod-arena-replay packet data. "
+            "Fast = reaction <= {}ms; flagged at >= {} fast reactions making up >= {}%:",
+            replayId, reports.size(), EnhancedSupport::GetArenaTelemetrySuspectReactionMs(),
+            EnhancedSupport::GetArenaTelemetrySuspectMinEvents(), EnhancedSupport::GetArenaTelemetrySuspectPercent());
+
+        PrintArenaReports(handler, reports, true);
+
+        handler->SendSysMessage("Replay timestamps advance once per world tick and carry no latency data, "
+            "so single reactions are coarser than live telemetry; judge the distributions, not one value. "
+            "Failed casts and jukes are not recoverable from replay data.");
         handler->SendSysMessage("Verdicts need several matches, not one: compare with this player's other matches before acting.");
         return true;
     }
