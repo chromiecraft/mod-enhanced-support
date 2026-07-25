@@ -263,13 +263,18 @@ namespace
         return {};
     }
 
-    std::string StripWhitespace(std::string const& input)
+    // Drops whitespace and separator noise, keeping only letters, digits and
+    // dots. Digits must survive for FoldConfusables; dots must survive so
+    // HasUrlMarker can still see ".com". Catches ads interleaved with
+    // punctuation between every letter, not just spaced-out ones.
+    std::string StripSeparators(std::string const& input)
     {
         std::string out;
         out.reserve(input.size());
         for (char c : input)
         {
-            if (!std::isspace(static_cast<unsigned char>(c)))
+            unsigned char const uc = static_cast<unsigned char>(c);
+            if (std::isalnum(uc) || c == '.' || c == '$' || c == '@' || c == '|')
                 out.push_back(c);
         }
 
@@ -297,7 +302,8 @@ namespace
     }
 
     // Aggressive pass shared by the mail and chat filters: catches keywords evaded
-    // by spacing and by look-alike character substitutions, but only for a low-level
+    // by spacing, interleaved punctuation and look-alike character substitutions,
+    // but only for a low-level
     // sender whose text also carries a URL marker. Both signals are required to keep
     // despaced normal phrases from matching. Returns the matched keyword, or empty.
     std::string FindAggressiveMatch(Player* player, std::string const& text)
@@ -305,7 +311,7 @@ namespace
         if (_aggressiveMaxLevel == 0 || player->GetLevel() > _aggressiveMaxLevel)
             return {};
 
-        std::string const collapsed = FoldConfusables(StripWhitespace(ToLowerAscii(text)));
+        std::string const collapsed = FoldConfusables(StripSeparators(ToLowerAscii(text)));
         if (!HasUrlMarker(collapsed))
             return {};
 
@@ -1203,8 +1209,8 @@ private:
 
 // Filters player chat against the same keyword list as the mail filter. SAY/YELL/
 // EMOTE arrive via OnPlayerBeforeSendChatMessage, which can't abort the broadcast,
-// so a matched message is blanked. Party and whisper chat arrive via the boolean
-// OnPlayerCanUseChat overloads, which abort the broadcast outright when we return false.
+// so a matched message is blanked. Party, whisper and channel chat arrive via the
+// boolean OnPlayerCanUseChat overloads, which abort the broadcast when we return false.
 class EnhancedSupportChatFilter : public PlayerScript
 {
 public:
@@ -1212,6 +1218,7 @@ public:
         PLAYERHOOK_ON_BEFORE_SEND_CHAT_MESSAGE,
         PLAYERHOOK_CAN_PLAYER_USE_GROUP_CHAT,
         PLAYERHOOK_CAN_PLAYER_USE_PRIVATE_CHAT,
+        PLAYERHOOK_CAN_PLAYER_USE_CHANNEL_CHAT,
         PLAYERHOOK_ON_LOGOUT
     }) { }
 
@@ -1238,6 +1245,15 @@ public:
     bool OnPlayerCanUseChat(Player* player, uint32 type, uint32 lang, std::string& msg, Player* /*receiver*/) override
     {
         if (!FilterEnabled() || lang == LANG_ADDON || type != CHAT_MSG_WHISPER)
+            return true;
+
+        // Returning false aborts the broadcast, so no need to blank the text.
+        return !FilterMessage(player, type, msg);
+    }
+
+    bool OnPlayerCanUseChat(Player* player, uint32 type, uint32 lang, std::string& msg, Channel* /*channel*/) override
+    {
+        if (!FilterEnabled() || lang == LANG_ADDON || type != CHAT_MSG_CHANNEL)
             return true;
 
         // Returning false aborts the broadcast, so no need to blank the text.
@@ -1325,6 +1341,7 @@ private:
             case CHAT_MSG_WHISPER:      return "whisper";
             case CHAT_MSG_PARTY:        return "party";
             case CHAT_MSG_PARTY_LEADER: return "party leader";
+            case CHAT_MSG_CHANNEL:      return "channel";
             default:                    return "chat";
         }
     }
