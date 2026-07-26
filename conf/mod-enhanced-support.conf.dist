@@ -68,7 +68,8 @@ EnhancedSupport.MailFilter.SkipSameAccount = 0
 
 #
 #    EnhancedSupport.ChatFilter.Action
-#        Description: What to do when a player's SAY, YELL, EMOTE, PARTY or WHISPER message
+#        Description: What to do when a player's SAY, YELL, EMOTE, PARTY, WHISPER or channel
+#                     (Trade, General, custom, ...) message
 #                     contains a configured keyword. Uses the same keyword list as the mail filter
 #                     and the same ban author. Also gated by EnhancedSupport.Enable. The
 #                     matched message is always suppressed for any value above 0; the
@@ -97,7 +98,10 @@ EnhancedSupport.ChatFilter.Message = "Your message was blocked because it contai
 #                     swapping in look-alike characters (digits for letters), in both mail
 #                     and chat, but only from low-level senders (gold-seller bots are
 #                     throwaway low-level characters) whose text also contains a web marker
-#                     (.com, www, http, "dot com", ...). Both conditions are required, which
+#                     (.com, www, http, "dot com", ...) or a search callout (google, youtube -
+#                     ads that avoid writing a URL and tell the reader to search instead;
+#                     "discord" is not one, so guild ads stay safe). Both conditions are
+#                     required, which
 #                     keeps normal phrases like "LFG tank for Onyxia" from matching. Set to
 #                     the highest character level this aggressive pass applies to. Matches
 #                     reuse each filter's own action (MailFilter.Action / ChatFilter.Action).
@@ -135,6 +139,37 @@ EnhancedSupport.ChatFilter.WindowSize = 0
 #
 
 EnhancedSupport.ChatFilter.WindowSeconds = 0
+
+#
+#    EnhancedSupport.ChatFilter.RepeatCount
+#    EnhancedSupport.ChatFilter.RepeatSeconds
+#        Description: Catches spam no keyword covers yet: a sender blasting the same line
+#                     over and over (an ad has to repeat to reach an audience, and new
+#                     campaigns dodge the keyword list by design). A message is flagged once
+#                     RepeatCount copies of it from the same sender fall within RepeatSeconds,
+#                     counted across all chat types together (say, yell, whispers, Trade,
+#                     world, ...). Copies are compared in collapsed form (case, punctuation
+#                     and look-alike characters ignored), so light reshuffling between copies
+#                     doesn't reset the count. RepeatCount must be at least 2 and RepeatSeconds
+#                     above 0 for the pass to run; it also requires
+#                     EnhancedSupport.AggressiveMaxLevel, since max-level players legitimately
+#                     repeat trade/LFM lines, and reuses ChatFilter.Action.
+#        Default:     0 - Disabled
+#                     e.g. RepeatCount = 3, RepeatSeconds = 60 - act on the 3rd copy within 60s
+#
+
+EnhancedSupport.ChatFilter.RepeatCount = 0
+EnhancedSupport.ChatFilter.RepeatSeconds = 0
+
+#
+#    EnhancedSupport.ChatFilter.RepeatMinLength
+#        Description: Minimum length (in collapsed characters, i.e. letters and digits) a
+#                     message needs to be counted by the repetition pass above. Keeps short
+#                     lines players naturally repeat ("lol", "wts ore") out of the count.
+#        Default:     10
+#
+
+EnhancedSupport.ChatFilter.RepeatMinLength = 10
 
 #
 #    EnhancedSupport.InviteFilter.Action

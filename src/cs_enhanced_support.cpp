@@ -108,6 +108,15 @@ public:
             handler->PSendSysMessage("  Chat window pass: last {} line(s) within {}s (level <= {})",
                 windowSize, windowSeconds, static_cast<uint32>(aggressiveMaxLevel));
 
+        uint32 const repeatCount = EnhancedSupport::GetChatRepeatCount();
+        uint32 const repeatSeconds = EnhancedSupport::GetChatRepeatSeconds();
+        if (repeatCount < 2 || repeatSeconds == 0 || aggressiveMaxLevel == 0)
+            handler->PSendSysMessage("  Chat repeat pass: disabled");
+        else
+            handler->PSendSysMessage("  Chat repeat pass: {} copies within {}s, min length {} (level <= {})",
+                repeatCount, repeatSeconds, EnhancedSupport::GetChatRepeatMinLength(),
+                static_cast<uint32>(aggressiveMaxLevel));
+
         handler->PSendSysMessage("  Keywords loaded: {}", EnhancedSupport::GetKeywords().size());
         handler->PSendSysMessage("  Email filter: {} ({} pattern(s) loaded)",
             EnhancedSupport::GetEmailFilterEnabled() ? "enabled" : "disabled",

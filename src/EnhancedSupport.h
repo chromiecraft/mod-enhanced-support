@@ -63,6 +63,13 @@ namespace EnhancedSupport
     uint32 GetChatWindowSize();
     uint32 GetChatWindowSeconds();
 
+    // Repetition pass: how many copies of the same message within how many
+    // seconds trigger it (Count < 2 or Seconds 0 disables the pass), and the
+    // minimum collapsed-text length a message needs to be counted.
+    uint32 GetChatRepeatCount();
+    uint32 GetChatRepeatSeconds();
+    uint32 GetChatRepeatMinLength();
+
     // Party-invite spam filter: action scale, the level cap it watches (0 = all
     // levels), and the rate threshold (more than Count invites within Seconds).
     uint8 GetInviteFilterAction();

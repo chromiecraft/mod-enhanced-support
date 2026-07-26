@@ -113,6 +113,19 @@ namespace
     uint32 _chatWindowSize = 0;
     uint32 _chatWindowSeconds = 0;
 
+    // Repetition (keyword-independent) chat matching flags a sender who blasts
+    // the same line over and over: an ad with no URL and no known keyword still
+    // has to repeat to reach an audience. A message is flagged when RepeatCount
+    // copies of it (compared in collapsed form, so punctuation tweaks between
+    // copies don't reset the count) fall within RepeatSeconds; collapsed texts
+    // shorter than RepeatMinLength are ignored so repeated short exclamations
+    // ("lol", "wts ore") never trigger it. RepeatCount >= 2 and RepeatSeconds > 0
+    // enable the pass; it is additionally gated by _aggressiveMaxLevel, since
+    // max-level players legitimately repeat trade/LFM lines.
+    uint32 _chatRepeatCount = 0;
+    uint32 _chatRepeatSeconds = 0;
+    uint32 _chatRepeatMinLength = 10;
+
     // Party-invite spam filter: blocks a sender's group invites once more than
     // RateCount of them are fired within RateSeconds. Has its own action scale.
     // Only inviters at or below MaxLevel are watched (0 = every level). Invites to
@@ -282,14 +295,20 @@ namespace
     }
 
     // True if the (lowercased, whitespace-stripped) text carries a web/contact
-    // marker. Used as the second signal for aggressive matching so that a
-    // collapsed keyword hit alone (a despaced phrase can fuse into a real word)
-    // isn't enough.
+    // marker. Search callouts count too: ads that avoid writing a URL entirely
+    // ("just google X and Y") still have to tell the reader where to look, and
+    // that instruction is the contact vector. Used as the second signal for
+    // aggressive matching so that a collapsed keyword hit alone (a despaced
+    // phrase can fuse into a real word) isn't enough.
     bool HasUrlMarker(std::string const& collapsed)
     {
-        static constexpr std::array<std::string_view, 10> markers =
+        // "discord" is deliberately not a marker: guild recruitment legitimately
+        // says "join our discord", and a keyword hit on top of that would ban
+        // the advertiser.
+        static constexpr std::array<std::string_view, 12> markers =
         {
-            "http", "www", "wvvw", "web", ".com", ".net", ".org", "dotcom", "dotnet", "dotorg"
+            "http", "www", "wvvw", "web", ".com", ".net", ".org", "dotcom", "dotnet", "dotorg",
+            "google", "youtube"
         };
 
         for (std::string_view marker : markers)
@@ -372,6 +391,59 @@ namespace
             matched = FindAggressiveMatch(player, joined);
 
         return matched;
+    }
+
+    bool RepeatFilterConfigured()
+    {
+        return _chatRepeatCount >= 2 && _chatRepeatSeconds != 0 && _aggressiveMaxLevel != 0;
+    }
+
+    // Recent collapsed chat lines per sender for the repetition pass. Keyed by
+    // sender only, so copies spread across different channels count together.
+    // Pruned by age on insert and cleared on logout or on a match.
+    std::unordered_map<ObjectGuid, std::deque<TimedMessage>> _recentRepeatMessages;
+
+    void ClearRepeatWindow(ObjectGuid guid)
+    {
+        _recentRepeatMessages.erase(guid);
+    }
+
+    // Layer 4: flags the Nth copy of the same message within the rate window
+    // (see the _chatRepeatCount comment). Returns a description of the
+    // repetition for the log/notification, or empty.
+    std::string FindRepeatedMessage(Player* player, std::string const& msg)
+    {
+        if (!RepeatFilterConfigured() || player->GetLevel() > _aggressiveMaxLevel)
+            return {};
+
+        std::string const collapsed = FoldConfusables(StripSeparators(ToLowerAscii(msg)));
+        if (collapsed.size() < _chatRepeatMinLength)
+            return {};
+
+        time_t const now = GameTime::GetGameTime().count();
+        std::deque<TimedMessage>& history = _recentRepeatMessages[player->GetGUID()];
+
+        while (!history.empty() && now - history.front().time > static_cast<time_t>(_chatRepeatSeconds))
+            history.pop_front();
+
+        uint32 copies = 1;
+        for (TimedMessage const& entry : history)
+        {
+            if (entry.text == collapsed)
+                ++copies;
+        }
+
+        history.push_back({ now, collapsed });
+
+        // Hard size cap so a client flooding faster than the age pruning can
+        // keep up doesn't grow the deque without bound.
+        while (history.size() > 50)
+            history.pop_front();
+
+        if (copies < _chatRepeatCount)
+            return {};
+
+        return Acore::StringFormat("same message x{} within {}s", copies, _chatRepeatSeconds);
     }
 
     // Per-inviter timestamps of recent group invites, for the rate check. Pruned
@@ -873,6 +945,21 @@ namespace EnhancedSupport
         return _chatWindowSeconds;
     }
 
+    uint32 GetChatRepeatCount()
+    {
+        return _chatRepeatCount;
+    }
+
+    uint32 GetChatRepeatSeconds()
+    {
+        return _chatRepeatSeconds;
+    }
+
+    uint32 GetChatRepeatMinLength()
+    {
+        return _chatRepeatMinLength;
+    }
+
     uint8 GetInviteFilterAction()
     {
         return _inviteFilterAction;
@@ -974,6 +1061,10 @@ namespace EnhancedSupport
 
         _chatWindowSize = sConfigMgr->GetOption<uint32>("EnhancedSupport.ChatFilter.WindowSize", 0);
         _chatWindowSeconds = sConfigMgr->GetOption<uint32>("EnhancedSupport.ChatFilter.WindowSeconds", 0);
+
+        _chatRepeatCount = sConfigMgr->GetOption<uint32>("EnhancedSupport.ChatFilter.RepeatCount", 0);
+        _chatRepeatSeconds = sConfigMgr->GetOption<uint32>("EnhancedSupport.ChatFilter.RepeatSeconds", 0);
+        _chatRepeatMinLength = sConfigMgr->GetOption<uint32>("EnhancedSupport.ChatFilter.RepeatMinLength", 10);
 
         _inviteFilterAction = sConfigMgr->GetOption<uint8>("EnhancedSupport.InviteFilter.Action", MAIL_FILTER_DISABLED);
         _inviteFilterMessage = sConfigMgr->GetOption<std::string>("EnhancedSupport.InviteFilter.Message",
@@ -1263,12 +1354,16 @@ public:
     void OnPlayerLogout(Player* player) override
     {
         ClearChatWindow(player->GetGUID());
+        ClearRepeatWindow(player->GetGUID());
     }
 
 private:
     static bool FilterEnabled()
     {
-        return _enabled && _chatFilterAction != MAIL_FILTER_DISABLED && !_mailFilterKeywords.empty();
+        // The repetition pass needs no keywords, so an empty keyword list only
+        // disables the filter when that pass is off too.
+        return _enabled && _chatFilterAction != MAIL_FILTER_DISABLED
+            && (!_mailFilterKeywords.empty() || RepeatFilterConfigured());
     }
 
     // Runs both match layers over a chat message; on a hit it logs, relays to
@@ -1297,12 +1392,22 @@ private:
                 layer = "windowed";
         }
 
+        // Layer 4: keyword-independent repetition match (see helper), for ads
+        // no keyword covers yet.
+        if (matched.empty())
+        {
+            matched = FindRepeatedMessage(player, msg);
+            if (!matched.empty())
+                layer = "repeat";
+        }
+
         if (matched.empty())
             return false;
 
         // A match means the buffered lines have been acted on; drop the history
         // so the same window doesn't re-fire on the sender's next message.
         ClearChatWindow(player->GetGUID());
+        ClearRepeatWindow(player->GetGUID());
 
         LOG_INFO("module.enhancedsupport",
             "ChatFilter: blocked {} from {} ({}, level {}) - matched keyword '{}', layer {}, action {} | message: \"{}\"",
