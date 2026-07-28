@@ -230,6 +230,19 @@ public:
                     EnhancedSupport::GetArenaTelemetrySuspectPercent());
         }
 
+        uint32 const dormantDays = EnhancedSupport::GetDormantLoginDays();
+        if (dormantDays == 0)
+            handler->SendSysMessage("  Dormant login alert: disabled");
+        else
+        {
+            uint32 const dormantMaskBits = EnhancedSupport::GetDormantLoginIpMaskBits();
+            handler->PSendSysMessage("  Dormant login alert: after {} day(s) inactive, {}",
+                dormantDays,
+                dormantMaskBits == 0
+                    ? "from any IP"
+                    : Acore::StringFormat("from an IP outside the last-known /{}", dormantMaskBits));
+        }
+
         handler->PSendSysMessage("  Ban author: {}", EnhancedSupport::GetBanAuthor());
 
         std::string const& message = EnhancedSupport::GetMailFilterMessage();

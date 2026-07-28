@@ -1107,6 +1107,7 @@ namespace EnhancedSupport
         _startupNoticeDelaySeconds = sConfigMgr->GetOption<uint32>("EnhancedSupport.StartupNotice.DelaySeconds", 5);
 
         LoadArenaTelemetryConfig();
+        LoadDormantLoginConfig();
     }
 }
 

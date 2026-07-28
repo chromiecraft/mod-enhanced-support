@@ -163,6 +163,30 @@ the `.support emailpattern` commands below and shared across all realms, like th
 mail keywords. `EnhancedSupport.EmailFilter.Enable` is a master switch for the check
 (default on); when enabled it runs only once at least one pattern is configured.
 
+### Dormant-login detection
+
+Reports when an account logs in after a long period of inactivity from an IP
+outside its last-known range - the pattern of credentials leaked elsewhere being
+tried on abandoned accounts. Alerts are written under `module.enhancedsupport`
+and, when mod-chat-transmitter is available, relayed to Discord (sharing the
+chat filter's channel), identifying the account, the new IP, the previous IP and
+how long the account was inactive. Detection only: the login is never blocked
+and the account is not restricted.
+
+`EnhancedSupport.DormantLogin.Days` sets the inactivity threshold and is the
+feature's master switch (`0` disables it). `EnhancedSupport.DormantLogin.IpMaskBits`
+sets how much of the IPv4 address must match to count as the same network
+(a CIDR prefix length, default `24`); `0` ignores the IP and reports every
+dormant-account login.
+
+The baseline (last world login and IP per account) lives in the auth DB table
+`enhanced_support_account_activity`, shared across all realms. It is seeded from
+the `account` table when the module's SQL update is applied and refreshed on
+every world login, even while the alert is disabled, so enabling it later works
+against a current baseline. The module keeps its own table because the
+authserver overwrites `account.last_ip`/`last_login` before the worldserver sees
+the login.
+
 ### Arena telemetry (cheat detection)
 
 Records raw combat events from live arena matches into the characters DB table
@@ -344,6 +368,8 @@ Examples: `.support keyword add wowgold`, `.support list keywords`,
 | `EnhancedSupport.LootFilter.LevelGap` | `0`      | Log loot whose required level exceeds the looter's level by at least this gap; `0` disables |
 | `EnhancedSupport.LootFilter.MaxLevel` | `0`      | Cap the loot check to looters at or below this level; `0` applies to all levels |
 | `EnhancedSupport.EmailFilter.Enable` | `1`       | Master switch for the account email-pattern check at character creation; runs once at least one pattern is configured |
+| `EnhancedSupport.DormantLogin.Days` | `0`       | Report accounts logging in after at least this many days of inactivity (see IpMaskBits); `0` disables the check |
+| `EnhancedSupport.DormantLogin.IpMaskBits` | `24` | IPv4 CIDR prefix length that must match the last-known IP to skip the report; `0` ignores the IP entirely |
 | `EnhancedSupport.ArenaTelemetry.Enable` | `0`   | Record arena combat telemetry (casts, cancels, failed casts, aura applies/removes, position samples) to `enhanced_support_arena_events` for offline cheat detection |
 | `EnhancedSupport.ArenaTelemetry.RatedOnly` | `1` | Record rated matches only; `0` also records skirmishes |
 | `EnhancedSupport.ArenaTelemetry.PositionSampleMs` | `500` | Interval between position/orientation samples (min 100); `0` disables sampling, cast/aura events remain |
@@ -363,13 +389,14 @@ Examples: `.support keyword add wowgold`, `.support list keywords`,
 - `src/mod_enhanced_support.cpp` — world/player scripts (config cache, mail filter).
 - `src/cs_enhanced_support.cpp` — the `.support` chat commands.
 - `src/arena_telemetry.cpp` — the arena telemetry recorder (cheat detection).
+- `src/dormant_login.cpp` — the dormant-login detector.
 - `src/EnhancedSupport.h` — shared config/keyword API used by the `.cpp` files.
 - `conf/mod-enhanced-support.conf.dist` — distributed config template.
 - `data/sql/db-auth`, `data/sql/db-world`, `data/sql/db-characters` —
   `base`/`updates` SQL applied automatically by the module DB updater. The mail
-  keyword and email pattern tables live in `db-auth/updates`; the `.support`
-  command help rows in `db-world/updates`; the arena telemetry event table in
-  `db-characters/updates`.
+  keyword, email pattern and account activity tables live in `db-auth/updates`;
+  the `.support` command help rows in `db-world/updates`; the arena telemetry
+  event table in `db-characters/updates`.
 
 ## License
 

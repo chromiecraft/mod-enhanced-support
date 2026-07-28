@@ -116,6 +116,14 @@ namespace EnhancedSupport
     // Formats a copper amount as a "Xg Ys Zc" string.
     std::string FormatMoney(uint32 copper);
 
+    // Dormant-login detection: report (server log + Discord) when an account
+    // logs in after at least Days of inactivity from an IP outside its
+    // last-known /IpMaskBits range. Detection only; nothing is blocked. State
+    // lives in dormant_login.cpp; LoadConfig() calls LoadDormantLoginConfig().
+    void LoadDormantLoginConfig();
+    uint32 GetDormantLoginDays();
+    uint32 GetDormantLoginIpMaskBits();
+
     // Arena telemetry (cheat detection): raw cast/aura/position events from live
     // arena matches, written to the characters DB table enhanced_support_arena_events
     // for offline reaction-time and facing analysis. State lives in

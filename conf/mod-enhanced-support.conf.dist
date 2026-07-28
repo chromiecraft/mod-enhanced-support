@@ -397,6 +397,39 @@ EnhancedSupport.AuctionFilter.BatchSeconds = 0
 EnhancedSupport.EmailFilter.Enable = 1
 
 #
+#    EnhancedSupport.DormantLogin.Days
+#        Description: Report when an account logs in after at least this many days of
+#                     inactivity from an IP outside its last-known range (see IpMaskBits
+#                     below) - the pattern of credentials leaked on other servers being
+#                     tried on abandoned accounts. Reports go to the server log and to
+#                     Discord (via mod-chat-transmitter's ChatFilter alias, when available).
+#                     Detection only: the login is never blocked and the account is not
+#                     restricted. Also gated by EnhancedSupport.Enable.
+#                     The baseline (last world login + IP per account) lives in the auth DB
+#                     table enhanced_support_account_activity, seeded from the account table
+#                     when the module's SQL update is applied and refreshed on every world
+#                     login - including while this option is 0, so enabling it later works
+#                     against a current baseline.
+#        Default:     0 - Disabled (no dormant-login check)
+#                     e.g. 90 - Report dormant accounts returning after 90+ days (~3 months)
+#
+
+EnhancedSupport.DormantLogin.Days = 0
+
+#
+#    EnhancedSupport.DormantLogin.IpMaskBits
+#        Description: How much of the connecting IPv4 address must match the account's
+#                     last-known IP for the login to count as the same network and skip
+#                     the report. A CIDR prefix length: 24 compares the first three octets
+#                     (a.b.c.*), 16 the first two, 32 the exact address. Non-IPv4 addresses
+#                     fall back to exact-match comparison. Set to 0 to ignore the IP
+#                     entirely and report every dormant-account login.
+#        Default:     24
+#
+
+EnhancedSupport.DormantLogin.IpMaskBits = 24
+
+#
 #    EnhancedSupport.ArenaTelemetry.Enable
 #        Description: Record raw combat telemetry from live arena matches into the characters
 #                     DB table `enhanced_support_arena_events`, for offline cheat detection

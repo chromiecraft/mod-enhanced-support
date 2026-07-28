@@ -19,10 +19,12 @@
 void AddEnhancedSupportScripts();
 void AddEnhancedSupportCommandScripts();
 void AddEnhancedSupportArenaTelemetryScripts();
+void AddEnhancedSupportDormantLoginScripts();
 
 void Addmod_enhanced_supportScripts()
 {
     AddEnhancedSupportScripts();
     AddEnhancedSupportCommandScripts();
     AddEnhancedSupportArenaTelemetryScripts();
+    AddEnhancedSupportDormantLoginScripts();
 }
