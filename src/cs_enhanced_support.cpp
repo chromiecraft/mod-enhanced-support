@@ -40,6 +40,7 @@ public:
         {
             { "bans",          HandleListBansCommand,          SEC_GAMEMASTER, Console::Yes },
             { "keywords",      HandleListKeywordsCommand,      SEC_GAMEMASTER, Console::Yes },
+            { "weakkeywords",  HandleListWeakKeywordsCommand,  SEC_GAMEMASTER, Console::Yes },
             { "emailpatterns", HandleListEmailPatternsCommand, SEC_GAMEMASTER, Console::Yes },
         };
 
@@ -47,6 +48,12 @@ public:
         {
             { "add",    HandleKeywordAddCommand,    SEC_ADMINISTRATOR, Console::Yes },
             { "remove", HandleKeywordRemoveCommand, SEC_ADMINISTRATOR, Console::Yes },
+        };
+
+        static ChatCommandTable weakKeywordTable =
+        {
+            { "add",    HandleWeakKeywordAddCommand,    SEC_ADMINISTRATOR, Console::Yes },
+            { "remove", HandleWeakKeywordRemoveCommand, SEC_ADMINISTRATOR, Console::Yes },
         };
 
         static ChatCommandTable emailPatternTable =
@@ -70,6 +77,7 @@ public:
             { "reload",       HandleReloadCommand, SEC_ADMINISTRATOR, Console::Yes },
             { "list",         listTable },
             { "keyword",      keywordTable },
+            { "weakkeyword",  weakKeywordTable },
             { "emailpattern", emailPatternTable },
             { "arena",        arenaTable },
         };
@@ -94,10 +102,16 @@ public:
             static_cast<uint32>(EnhancedSupport::GetChatFilterAction()), EnhancedSupport::GetChatFilterActionName());
 
         uint8 const aggressiveMaxLevel = EnhancedSupport::GetAggressiveMaxLevel();
-        if (aggressiveMaxLevel == 0)
-            handler->PSendSysMessage("  Aggressive pass: disabled");
+        uint32 const scoreThreshold = EnhancedSupport::GetScoreThreshold();
+        if (aggressiveMaxLevel == 0 || scoreThreshold == 0)
+            handler->PSendSysMessage("  Scored pass: disabled");
         else
-            handler->PSendSysMessage("  Aggressive pass: enabled for level <= {}",
+            handler->PSendSysMessage(
+                "  Scored pass: acts at {} points (keyword +{}, marker +{}, weak keyword +{} capped {}, repeat copy +{} capped {}) for level <= {}",
+                scoreThreshold,
+                EnhancedSupport::GetScoreKeywordPoints(), EnhancedSupport::GetScoreMarkerPoints(),
+                EnhancedSupport::GetScoreWeakKeywordPoints(), EnhancedSupport::GetScoreWeakKeywordMaxPoints(),
+                EnhancedSupport::GetScoreRepeatCopyPoints(), EnhancedSupport::GetScoreRepeatCopyMaxPoints(),
                 static_cast<uint32>(aggressiveMaxLevel));
 
         uint32 const windowSize = EnhancedSupport::GetChatWindowSize();
@@ -118,6 +132,7 @@ public:
                 static_cast<uint32>(aggressiveMaxLevel));
 
         handler->PSendSysMessage("  Keywords loaded: {}", EnhancedSupport::GetKeywords().size());
+        handler->PSendSysMessage("  Weak keywords loaded: {}", EnhancedSupport::GetWeakKeywords().size());
         handler->PSendSysMessage("  Email filter: {} ({} pattern(s) loaded)",
             EnhancedSupport::GetEmailFilterEnabled() ? "enabled" : "disabled",
             EnhancedSupport::GetEmailPatterns().size());
@@ -273,8 +288,9 @@ public:
         sConfigMgr->LoadModulesConfigs(true, false);
         EnhancedSupport::LoadConfig();
         EnhancedSupport::LoadKeywords();
+        EnhancedSupport::LoadWeakKeywords();
         EnhancedSupport::LoadEmailPatterns();
-        handler->PSendSysMessage("mod-enhanced-support: configuration, keywords and email patterns reloaded.");
+        handler->PSendSysMessage("mod-enhanced-support: configuration, keywords, weak keywords and email patterns reloaded.");
         return true;
     }
 
@@ -334,6 +350,65 @@ public:
 
         EnhancedSupport::RemoveKeyword(normalized);
         handler->PSendSysMessage("Removed mail keyword: {}", normalized);
+        return true;
+    }
+
+    static bool HandleListWeakKeywordsCommand(ChatHandler* handler)
+    {
+        std::vector<std::string> const& keywords = EnhancedSupport::GetWeakKeywords();
+        if (keywords.empty())
+        {
+            handler->SendSysMessage("mod-enhanced-support: no weak keywords configured.");
+            return true;
+        }
+
+        handler->PSendSysMessage("mod-enhanced-support: {} weak keyword(s):", keywords.size());
+        for (std::string const& keyword : keywords)
+            handler->PSendSysMessage(" - {}", keyword);
+
+        return true;
+    }
+
+    static bool HandleWeakKeywordAddCommand(ChatHandler* handler, Tail keyword)
+    {
+        std::string normalized = EnhancedSupport::NormalizeKeyword(keyword);
+        if (normalized.empty())
+        {
+            handler->SendSysMessage("Usage: .support weakkeyword add <keyword>");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        if (EnhancedSupport::HasWeakKeyword(normalized))
+        {
+            handler->PSendSysMessage("Weak keyword already present: {}", normalized);
+            return true;
+        }
+
+        EnhancedSupport::AddWeakKeyword(normalized);
+        handler->PSendSysMessage("Added weak keyword: {}", normalized);
+        return true;
+    }
+
+    static bool HandleWeakKeywordRemoveCommand(ChatHandler* handler, Tail keyword)
+    {
+        std::string normalized = EnhancedSupport::NormalizeKeyword(keyword);
+        if (normalized.empty())
+        {
+            handler->SendSysMessage("Usage: .support weakkeyword remove <keyword>");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        if (!EnhancedSupport::HasWeakKeyword(normalized))
+        {
+            handler->PSendSysMessage("Weak keyword not found: {}", normalized);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        EnhancedSupport::RemoveWeakKeyword(normalized);
+        handler->PSendSysMessage("Removed weak keyword: {}", normalized);
         return true;
     }
 

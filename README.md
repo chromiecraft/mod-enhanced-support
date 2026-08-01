@@ -63,7 +63,7 @@ kick/ban actions the sender is removed regardless.
 | `3`    | Block message + permanently ban the sender's account    |
 | `4`    | Block message + permanently ban the account and its IP  |
 
-### Aggressive low-level pass
+### Scored low-level pass
 
 Both the mail and chat filters match keywords as contiguous substrings, so
 spammers evade them by spacing letters out (`B U Y G O L D . C O M`). Collapsing
@@ -72,36 +72,52 @@ phrases: a group-finding message typed with spaces collapses into a single solid
 token that can contain a blocked keyword as a substring, false-positiving
 legitimate chat.
 
-The aggressive pass (`EnhancedSupport.AggressiveMaxLevel`) runs the
-whitespace-collapsed match for both mail and chat, additionally folding common
-look-alike character substitutions back to letters so digit-disguised text reads
-as its plain form. It runs only when **both** of these hold:
+The scored pass runs the collapsed match for both mail and chat (separators
+stripped, common look-alike character substitutions folded back to letters so
+digit-disguised text reads as its plain form) and only acts when enough
+independent signals agree. It is gated to senders at or below
+`EnhancedSupport.AggressiveMaxLevel` (gold bots are throwaway low-level
+characters; real raiders advertising `LFG tank for Onyxia` are not). Within
+that gate, a keyword hit in the collapsed text is required and scores points,
+and each side signal adds more:
 
-- the sender is at or below the configured level (gold bots are throwaway
-  low-level characters; real raiders advertising `LFG tank for Onyxia` are not), and
-- the text also contains a web marker (`.com`, `www`, `http`, `dot com`, ...).
+- a web or search marker (`.com`, `www`, `http`, `dot com`, `google`,
+  `search engine`, ...) - ads that avoid writing a URL still have to tell the
+  reader where to look;
+- weak keywords: contextual words too common to act on alone but suspicious
+  next to a real keyword. They live in the auth DB table
+  `enhanced_support_weak_keywords`, managed with the `.support weakkeyword`
+  commands and shared across realms like the mail keywords;
+- repeated copies of the same message within the repetition window (chat only).
 
-`LFG tank for Onyxia` from a level 70 fails the level gate; `LFG tank for RFC`
-from a new player fails the web-marker gate; the spam line passes both. Matches
-reuse each filter's own action (`MailFilter.Action` / `ChatFilter.Action`). Set
-`AggressiveMaxLevel` to `0` to disable it.
+The action fires once the total reaches `EnhancedSupport.Score.Threshold`.
+Because the keyword hit is mandatory, the side signals can never act alone;
+because several different second signals count, an ad can't slip through by
+carefully omitting just one of them. With the default points (keyword 2,
+marker 2, weak 1 capped at 2, repeat copy 1 capped at 2, threshold 4) a
+keyword plus any one strong signal - or two weaker ones - acts, which
+reproduces the previous keyword-plus-marker behaviour until weak keywords are
+configured. Matches reuse each filter's own action (`MailFilter.Action` /
+`ChatFilter.Action`) and report their full score breakdown in the log and
+Discord notice. Set `AggressiveMaxLevel` or `Score.Threshold` to `0` to
+disable the pass.
 
 ### Cross-message chat window
 
 Both passes above look at a single message, so spammers split an advertisement
 across several lines, padding it with unrelated chatter so that no single line is
 actionable on its own. No one line carries a complete URL, so neither the strict
-nor the aggressive pass fires.
+nor the scored pass fires.
 
 The windowed pass keeps a short, time-bounded history of each sender's recent
-chat lines and re-runs the strict and aggressive matches over the joined text,
+chat lines and re-runs the strict and scored matches over the joined text,
 reassembling the fragments so the match fires.
 
 It is controlled by `EnhancedSupport.ChatFilter.WindowSize` (max lines kept per
 sender) and `EnhancedSupport.ChatFilter.WindowSeconds` (how long a line stays in
 the window). It only runs when `WindowSize` is at least `2`, `WindowSeconds` is
 set, and the sender is at or below `EnhancedSupport.AggressiveMaxLevel`, so it
-inherits the same low-level + web-marker safeguards. Because the core hook for
+inherits the same low-level and multi-signal safeguards. Because the core hook for
 `SAY`/`YELL`/`EMOTE` cannot recall lines already broadcast, only the final
 fragment is blanked; the earlier lines have gone out, but the URL never completes
 and the full joined text is logged and the configured action applied. The history
@@ -345,6 +361,9 @@ All commands live under `.support` and work in-game and from the server console.
 | `.support keyword add <keyword>`         | Administrator | Adds a blocked keyword (stored lowercased).                                                   |
 | `.support keyword remove <keyword>`      | Administrator | Removes a blocked keyword.                                                                    |
 | `.support list keywords`                 | Game Master   | Lists the blocked keywords.                                                                   |
+| `.support weakkeyword add <keyword>`     | Administrator | Adds a weak keyword for the scored pass (stored lowercased).                                  |
+| `.support weakkeyword remove <keyword>`  | Administrator | Removes a weak keyword.                                                                       |
+| `.support list weakkeywords`             | Game Master   | Lists the weak keywords.                                                                      |
 | `.support emailpattern add <pattern>`    | Administrator | Adds an email substring pattern (stored lowercased).                                          |
 | `.support emailpattern remove <pattern>` | Administrator | Removes an email pattern.                                                                     |
 | `.support list emailpatterns`            | Game Master   | Lists the configured email patterns.                                                          |
@@ -365,6 +384,8 @@ Examples: `.support keyword add wowgold`, `.support list keywords`,
 | `EnhancedSupport.MailFilter.Action`  | `0`       | Match handling (0-4, see table above); also gated by `EnhancedSupport.Enable` |
 | `EnhancedSupport.MailFilter.Message` | (see conf)| System message shown to the sender when `Action = 1`; empty to send none  |
 | `EnhancedSupport.MailFilter.BanAuthor`| `SupportModule` | Author recorded on Action 3/4 bans; also the default `.support list bans` search term |
+| `EnhancedSupport.AggressiveMaxLevel` | `0`       | Level gate for the scored, windowed and repetition passes; `0` disables them |
+| `EnhancedSupport.Score.Threshold`    | `4`       | Points at which the scored pass acts; `0` disables it. Points per signal via `Score.KeywordPoints` (2), `Score.MarkerPoints` (2), `Score.WeakKeywordPoints`/`MaxPoints` (1/2), `Score.RepeatCopyPoints`/`MaxPoints` (1/2) |
 | `EnhancedSupport.LootFilter.LevelGap` | `0`      | Log loot whose required level exceeds the looter's level by at least this gap; `0` disables |
 | `EnhancedSupport.LootFilter.MaxLevel` | `0`      | Cap the loot check to looters at or below this level; `0` applies to all levels |
 | `EnhancedSupport.EmailFilter.Enable` | `1`       | Master switch for the account email-pattern check at character creation; runs once at least one pattern is configured |

@@ -82,6 +82,19 @@ namespace
     std::string _mailFilterBanAuthor;
     std::vector<std::string> _mailFilterKeywords;
 
+    // Collapsed (separator-stripped, confusable-folded) forms of the same
+    // keywords, index-aligned with _mailFilterKeywords, so keywords stored with
+    // spaces can still match collapsed text.
+    std::vector<std::string> _mailFilterKeywordsCollapsed;
+
+    // Weak keywords for the scored pass: contextual words that add points next
+    // to a real keyword hit but are far too common to act on alone ("gold",
+    // "cheap", "visit us"). Stored like the mail keywords; _weakKeywords holds
+    // the stored form for listing, _weakKeywordsCollapsed the index-aligned
+    // collapsed form used for matching.
+    std::vector<std::string> _weakKeywords;
+    std::vector<std::string> _weakKeywordsCollapsed;
+
     // Email substrings matched against an account's email when one of its characters
     // is created. Log-only; surfaces bot/gold-seller accounts that register with
     // recognizable email patterns. Stored lowercased, like the mail keywords.
@@ -99,10 +112,27 @@ namespace
     uint8 _chatFilterAction = MAIL_FILTER_DISABLED;
     std::string _chatFilterMessage;
 
-    // Aggressive (whitespace-collapsed) matching for mail and chat only runs for
-    // senders at or below this level whose text also carries a URL marker. 0
-    // disables it. Matches reuse each filter's own action.
+    // Collapsed (whitespace-stripped) matching for mail and chat only runs for
+    // senders at or below this level: it gates the scored pass below as well as
+    // the windowed and repetition passes. 0 disables them all. Matches reuse
+    // each filter's own action.
     uint8 _aggressiveMaxLevel = 0;
+
+    // Scored pass (mail and chat): a keyword hit in the collapsed text is
+    // required and scores KeywordPoints; a URL/search marker, weak keywords and
+    // repeated copies add points on top, and the filter action fires once the
+    // total reaches Threshold (0 disables the pass). Keeping the keyword
+    // mandatory means the side signals can never act alone. The defaults
+    // reproduce the previous two-signal behaviour - keyword (2) + marker (2)
+    // reach the threshold (4) - with weak keywords and repetition as
+    // alternative second signals.
+    uint32 _scoreThreshold = 4;
+    uint32 _scoreKeywordPoints = 2;
+    uint32 _scoreMarkerPoints = 2;
+    uint32 _scoreWeakPoints = 1;
+    uint32 _scoreWeakMaxPoints = 2;
+    uint32 _scoreRepeatPoints = 1;
+    uint32 _scoreRepeatMaxPoints = 2;
 
     // Cross-message (windowed) chat matching joins a sender's recent SAY/YELL/
     // EMOTE lines and matches the combined text, to catch ads split over several
@@ -219,7 +249,7 @@ namespace
 
     // Folds common leetspeak/look-alike substitutions back to letters so that
     // digit-evaded spam (".c0m", "g0ld", "dotn3t") reads as its plain form. Input
-    // is expected lowercased. Used only by the level-gated aggressive pass, where
+    // is expected lowercased. Used only by the level-gated collapsed passes, where
     // the extra false-positive risk of digit folding is bounded; the strict pass
     // keeps matching the text verbatim.
     std::string FoldConfusables(std::string const& input)
@@ -294,47 +324,133 @@ namespace
         return out;
     }
 
-    // True if the (lowercased, whitespace-stripped) text carries a web/contact
-    // marker. Search callouts count too: ads that avoid writing a URL entirely
-    // ("just google X and Y") still have to tell the reader where to look, and
-    // that instruction is the contact vector. Used as the second signal for
-    // aggressive matching so that a collapsed keyword hit alone (a despaced
-    // phrase can fuse into a real word) isn't enough.
-    bool HasUrlMarker(std::string const& collapsed)
+    // Canonical collapsed form used by the scored and repetition passes:
+    // lowercased, separator noise dropped, look-alike characters folded.
+    std::string CollapseText(std::string const& input)
+    {
+        return FoldConfusables(StripSeparators(ToLowerAscii(input)));
+    }
+
+    // Returns the first keyword whose collapsed form appears in the collapsed
+    // text (in stored form, for reporting), or empty. Counterpart of
+    // FindMatchingKeyword for the scored pass: a keyword stored with spaces or
+    // separators can only match collapsed text after being collapsed too.
+    std::string FindCollapsedKeyword(std::string const& collapsed)
+    {
+        for (std::size_t i = 0; i < _mailFilterKeywordsCollapsed.size(); ++i)
+        {
+            std::string const& needle = _mailFilterKeywordsCollapsed[i];
+            if (!needle.empty() && collapsed.find(needle) != std::string::npos)
+                return _mailFilterKeywords[i];
+        }
+
+        return {};
+    }
+
+    // Returns every weak keyword whose collapsed form appears in the collapsed
+    // text, in stored form for reporting.
+    std::vector<std::string> FindWeakKeywordHits(std::string const& collapsed)
+    {
+        std::vector<std::string> hits;
+        for (std::size_t i = 0; i < _weakKeywordsCollapsed.size(); ++i)
+        {
+            std::string const& needle = _weakKeywordsCollapsed[i];
+            if (!needle.empty() && collapsed.find(needle) != std::string::npos)
+                hits.push_back(_weakKeywords[i]);
+        }
+
+        return hits;
+    }
+
+    // Returns the web/contact marker carried by the (collapsed) text, or empty.
+    // Search callouts count too: ads that avoid writing a URL entirely ("just
+    // google X", "type X into the search engine") still have to tell the reader
+    // where to look, and that instruction is the contact vector. A side signal
+    // of the scored pass; a collapsed keyword hit alone (a despaced phrase can
+    // fuse into a real word) isn't enough to act.
+    std::string_view FindUrlMarker(std::string const& collapsed)
     {
         // "discord" is deliberately not a marker: guild recruitment legitimately
         // says "join our discord", and a keyword hit on top of that would ban
         // the advertiser.
-        static constexpr std::array<std::string_view, 12> markers =
+        static constexpr std::array<std::string_view, 13> markers =
         {
             "http", "www", "wvvw", "web", ".com", ".net", ".org", "dotcom", "dotnet", "dotorg",
-            "google", "youtube"
+            "google", "youtube", "searchengine"
         };
 
         for (std::string_view marker : markers)
         {
             if (collapsed.find(marker) != std::string::npos)
-                return true;
+                return marker;
         }
 
-        return false;
+        return {};
     }
 
-    // Aggressive pass shared by the mail and chat filters: catches keywords evaded
-    // by spacing, interleaved punctuation and look-alike character substitutions,
-    // but only for a low-level
-    // sender whose text also carries a URL marker. Both signals are required to keep
-    // despaced normal phrases from matching. Returns the matched keyword, or empty.
-    std::string FindAggressiveMatch(Player* player, std::string const& text)
+    // Scored pass shared by the mail and chat filters, replacing the old
+    // two-signal (keyword AND marker) gate with a point total. A keyword hit in
+    // the collapsed text is required and scores points; a URL/search marker,
+    // weak keywords and repeated copies add more, and the filter acts once the
+    // total reaches the threshold. The keyword stays mandatory because a
+    // despaced normal phrase can fuse into a real word - the side signals
+    // corroborate the keyword, they never act alone. Only runs for low-level
+    // senders. Returns a score breakdown for the log/notification, or empty.
+    std::string FindScoredMatch(Player* player, std::string const& text, uint32 repeatCopies = 0)
     {
-        if (_aggressiveMaxLevel == 0 || player->GetLevel() > _aggressiveMaxLevel)
+        if (_scoreThreshold == 0 || _aggressiveMaxLevel == 0 || player->GetLevel() > _aggressiveMaxLevel)
             return {};
 
-        std::string const collapsed = FoldConfusables(StripSeparators(ToLowerAscii(text)));
-        if (!HasUrlMarker(collapsed))
+        std::string const collapsed = CollapseText(text);
+
+        std::string const keyword = FindCollapsedKeyword(collapsed);
+        if (keyword.empty())
             return {};
 
-        return FindMatchingKeyword(collapsed);
+        uint32 score = _scoreKeywordPoints;
+        std::string breakdown = Acore::StringFormat("keyword '{}' +{}", keyword, _scoreKeywordPoints);
+
+        std::string_view const marker = FindUrlMarker(collapsed);
+        if (!marker.empty())
+        {
+            score += _scoreMarkerPoints;
+            breakdown += Acore::StringFormat(", marker '{}' +{}", marker, _scoreMarkerPoints);
+        }
+
+        std::vector<std::string> const weakHits = FindWeakKeywordHits(collapsed);
+        if (!weakHits.empty())
+        {
+            uint32 const points = std::min<uint32>(_scoreWeakMaxPoints,
+                static_cast<uint32>(weakHits.size()) * _scoreWeakPoints);
+            if (points != 0)
+            {
+                score += points;
+
+                std::string list;
+                for (std::string const& hit : weakHits)
+                {
+                    if (!list.empty())
+                        list += "', '";
+                    list += hit;
+                }
+                breakdown += Acore::StringFormat(", weak '{}' +{}", list, points);
+            }
+        }
+
+        if (repeatCopies > 1)
+        {
+            uint32 const points = std::min<uint32>(_scoreRepeatMaxPoints, (repeatCopies - 1) * _scoreRepeatPoints);
+            if (points != 0)
+            {
+                score += points;
+                breakdown += Acore::StringFormat(", {} copies +{}", repeatCopies, points);
+            }
+        }
+
+        if (score < _scoreThreshold)
+            return {};
+
+        return Acore::StringFormat("score {}/{}: {}", score, _scoreThreshold, breakdown);
     }
 
     // Cross-message chat history for the windowed pass: recent chat lines per
@@ -353,9 +469,9 @@ namespace
 
     // Layer 3: reconstructs an ad split over several messages. Appends the new
     // line to the sender's window, prunes by age and size, then matches the
-    // joined text with the strict and aggressive passes. Gated by the aggressive
+    // joined text with the strict and scored passes. Gated by the collapsed-pass
     // level cap (only low-level senders are joined) to limit false positives.
-    // Returns the matched keyword, or empty.
+    // Returns the matched keyword or score breakdown, or empty.
     std::string FindWindowedMatch(Player* player, std::string const& msg)
     {
         if (_chatWindowSize < 2 || _chatWindowSeconds == 0)
@@ -374,7 +490,7 @@ namespace
         while (history.size() > _chatWindowSize)
             history.pop_front();
 
-        // A single line was already checked by the strict and aggressive passes.
+        // A single line was already checked by the strict and scored passes.
         if (history.size() < 2)
             return {};
 
@@ -388,7 +504,7 @@ namespace
 
         std::string matched = FindMatchingKeyword(joined);
         if (matched.empty())
-            matched = FindAggressiveMatch(player, joined);
+            matched = FindScoredMatch(player, joined);
 
         return matched;
     }
@@ -408,17 +524,21 @@ namespace
         _recentRepeatMessages.erase(guid);
     }
 
-    // Layer 4: flags the Nth copy of the same message within the rate window
-    // (see the _chatRepeatCount comment). Returns a description of the
-    // repetition for the log/notification, or empty.
-    std::string FindRepeatedMessage(Player* player, std::string const& msg)
+    // Layer 4 bookkeeping: records the message in the sender's repeat window and
+    // returns how many copies of it (compared in collapsed form, so punctuation
+    // tweaks between copies don't reset the count) the window now holds,
+    // including this one. Returns 0 when the pass is off, the sender is above
+    // the level gate, or the collapsed text is below the minimum length. The
+    // caller applies the standalone verdict (>= _chatRepeatCount copies) and
+    // feeds the count into the scored pass as a side signal.
+    uint32 RecordRepeatAndCount(Player* player, std::string const& msg)
     {
         if (!RepeatFilterConfigured() || player->GetLevel() > _aggressiveMaxLevel)
-            return {};
+            return 0;
 
-        std::string const collapsed = FoldConfusables(StripSeparators(ToLowerAscii(msg)));
+        std::string const collapsed = CollapseText(msg);
         if (collapsed.size() < _chatRepeatMinLength)
-            return {};
+            return 0;
 
         time_t const now = GameTime::GetGameTime().count();
         std::deque<TimedMessage>& history = _recentRepeatMessages[player->GetGUID()];
@@ -440,10 +560,7 @@ namespace
         while (history.size() > 50)
             history.pop_front();
 
-        if (copies < _chatRepeatCount)
-            return {};
-
-        return Acore::StringFormat("same message x{} within {}s", copies, _chatRepeatSeconds);
+        return copies;
     }
 
     // Per-inviter timestamps of recent group invites, for the rate check. Pruned
@@ -779,6 +896,7 @@ namespace EnhancedSupport
     void LoadKeywords()
     {
         _mailFilterKeywords.clear();
+        _mailFilterKeywordsCollapsed.clear();
 
         QueryResult result = LoginDatabase.Query("SELECT keyword FROM enhanced_support_mail_keywords");
         if (!result)
@@ -787,8 +905,11 @@ namespace EnhancedSupport
         do
         {
             std::string keyword = NormalizeKeyword(result->Fetch()[0].Get<std::string>());
-            if (!keyword.empty())
-                _mailFilterKeywords.push_back(keyword);
+            if (keyword.empty())
+                continue;
+
+            _mailFilterKeywordsCollapsed.push_back(CollapseText(keyword));
+            _mailFilterKeywords.push_back(std::move(keyword));
         } while (result->NextRow());
     }
 
@@ -816,6 +937,54 @@ namespace EnhancedSupport
         LoginDatabase.EscapeString(escaped);
         LoginDatabase.Execute("DELETE FROM enhanced_support_mail_keywords WHERE keyword = '{}'", escaped);
         LoadKeywords();
+    }
+
+    // Weak keywords live in the auth DB (enhanced_support_weak_keywords) and are
+    // cached here (with their collapsed forms) so the chat hot path never hits the DB.
+    void LoadWeakKeywords()
+    {
+        _weakKeywords.clear();
+        _weakKeywordsCollapsed.clear();
+
+        QueryResult result = LoginDatabase.Query("SELECT keyword FROM enhanced_support_weak_keywords");
+        if (!result)
+            return;
+
+        do
+        {
+            std::string keyword = NormalizeKeyword(result->Fetch()[0].Get<std::string>());
+            if (keyword.empty())
+                continue;
+
+            _weakKeywordsCollapsed.push_back(CollapseText(keyword));
+            _weakKeywords.push_back(std::move(keyword));
+        } while (result->NextRow());
+    }
+
+    std::vector<std::string> const& GetWeakKeywords()
+    {
+        return _weakKeywords;
+    }
+
+    bool HasWeakKeyword(std::string const& normalized)
+    {
+        return std::find(_weakKeywords.begin(), _weakKeywords.end(), normalized) != _weakKeywords.end();
+    }
+
+    void AddWeakKeyword(std::string const& normalized)
+    {
+        std::string escaped = normalized;
+        LoginDatabase.EscapeString(escaped);
+        LoginDatabase.Execute("INSERT IGNORE INTO enhanced_support_weak_keywords (keyword) VALUES ('{}')", escaped);
+        LoadWeakKeywords();
+    }
+
+    void RemoveWeakKeyword(std::string const& normalized)
+    {
+        std::string escaped = normalized;
+        LoginDatabase.EscapeString(escaped);
+        LoginDatabase.Execute("DELETE FROM enhanced_support_weak_keywords WHERE keyword = '{}'", escaped);
+        LoadWeakKeywords();
     }
 
     // Email patterns live in the auth DB (enhanced_support_email_patterns) and are
@@ -933,6 +1102,41 @@ namespace EnhancedSupport
     uint8 GetAggressiveMaxLevel()
     {
         return _aggressiveMaxLevel;
+    }
+
+    uint32 GetScoreThreshold()
+    {
+        return _scoreThreshold;
+    }
+
+    uint32 GetScoreKeywordPoints()
+    {
+        return _scoreKeywordPoints;
+    }
+
+    uint32 GetScoreMarkerPoints()
+    {
+        return _scoreMarkerPoints;
+    }
+
+    uint32 GetScoreWeakKeywordPoints()
+    {
+        return _scoreWeakPoints;
+    }
+
+    uint32 GetScoreWeakKeywordMaxPoints()
+    {
+        return _scoreWeakMaxPoints;
+    }
+
+    uint32 GetScoreRepeatCopyPoints()
+    {
+        return _scoreRepeatPoints;
+    }
+
+    uint32 GetScoreRepeatCopyMaxPoints()
+    {
+        return _scoreRepeatMaxPoints;
     }
 
     uint32 GetChatWindowSize()
@@ -1059,6 +1263,20 @@ namespace EnhancedSupport
             "Your message was blocked because it contains a prohibited keyword.");
         _aggressiveMaxLevel = sConfigMgr->GetOption<uint8>("EnhancedSupport.AggressiveMaxLevel", 0);
 
+        _scoreThreshold = sConfigMgr->GetOption<uint32>("EnhancedSupport.Score.Threshold", 4);
+        _scoreKeywordPoints = sConfigMgr->GetOption<uint32>("EnhancedSupport.Score.KeywordPoints", 2);
+        _scoreMarkerPoints = sConfigMgr->GetOption<uint32>("EnhancedSupport.Score.MarkerPoints", 2);
+        _scoreWeakPoints = sConfigMgr->GetOption<uint32>("EnhancedSupport.Score.WeakKeywordPoints", 1);
+        _scoreWeakMaxPoints = sConfigMgr->GetOption<uint32>("EnhancedSupport.Score.WeakKeywordMaxPoints", 2);
+        _scoreRepeatPoints = sConfigMgr->GetOption<uint32>("EnhancedSupport.Score.RepeatCopyPoints", 1);
+        _scoreRepeatMaxPoints = sConfigMgr->GetOption<uint32>("EnhancedSupport.Score.RepeatCopyMaxPoints", 2);
+
+        if (_scoreThreshold != 0 && _scoreKeywordPoints >= _scoreThreshold)
+            LOG_WARN("module.enhancedsupport",
+                "Score: KeywordPoints ({}) >= Threshold ({}) - a collapsed keyword hit alone will act on low-level senders. "
+                "Despaced normal phrases can fuse into keywords, so expect false positives.",
+                _scoreKeywordPoints, _scoreThreshold);
+
         _chatWindowSize = sConfigMgr->GetOption<uint32>("EnhancedSupport.ChatFilter.WindowSize", 0);
         _chatWindowSeconds = sConfigMgr->GetOption<uint32>("EnhancedSupport.ChatFilter.WindowSeconds", 0);
 
@@ -1131,6 +1349,7 @@ public:
     void OnStartup() override
     {
         EnhancedSupport::LoadKeywords();
+        EnhancedSupport::LoadWeakKeywords();
         EnhancedSupport::LoadEmailPatterns();
 
         if (!_enabled || !_startupNoticeEnabled)
@@ -1208,14 +1427,15 @@ public:
 
         std::string const text = subject + '\n' + body;
         std::string matched = FindMatchingKeyword(text);
-        bool aggressive = false;
+        char const* layer = "strict";
 
-        // Aggressive collapsed match for low-level senders (see helper).
+        // Scored collapsed match for low-level senders (see helper). Mail has
+        // no repetition history, so only keyword/marker/weak signals apply.
         if (matched.empty())
         {
-            matched = FindAggressiveMatch(player, text);
+            matched = FindScoredMatch(player, text);
             if (!matched.empty())
-                aggressive = true;
+                layer = "score";
         }
 
         if (matched.empty())
@@ -1227,7 +1447,7 @@ public:
             "MailFilter: blocked mail from {} ({}, level {}) to {} ({}) - matched keyword '{}', layer {}, action {} | subject: \"{}\" | body: \"{}\"",
             player->GetName(), player->GetGUID().GetCounter(), static_cast<uint32>(player->GetLevel()),
             receiverName, receiverGuid.GetCounter(), matched,
-            aggressive ? "aggressive" : "strict", static_cast<uint32>(_mailFilterAction), subject, body);
+            layer, static_cast<uint32>(_mailFilterAction), subject, body);
 
 #ifdef HAS_CHAT_TRANSMITTER
         {
@@ -1237,7 +1457,7 @@ public:
                 "📬 To: **{}** (GUID {})\n"
                 "✉️ Subject: {}\n"
                 "📝 Body: {}",
-                matched, aggressive ? "aggressive" : "strict", EnhancedSupport::GetMailFilterActionName(),
+                matched, layer, EnhancedSupport::GetMailFilterActionName(),
                 player->GetName(), player->GetGUID().GetCounter(), static_cast<uint32>(player->GetLevel()),
                 player->GetSession()->GetAccountId(), player->GetSession()->GetRemoteAddress(),
                 receiverName, receiverGuid.GetCounter(),
@@ -1376,12 +1596,16 @@ private:
         std::string matched = FindMatchingKeyword(msg);
         char const* layer = "strict";
 
-        // Layer 2: aggressive collapsed match for low-level senders (see helper).
+        // Record the message for the repetition signal up front: the copy count
+        // feeds the scored pass and the standalone repeat verdict (layer 4).
+        uint32 const repeatCopies = RecordRepeatAndCount(player, msg);
+
+        // Layer 2: scored collapsed match for low-level senders (see helper).
         if (matched.empty())
         {
-            matched = FindAggressiveMatch(player, msg);
+            matched = FindScoredMatch(player, msg, repeatCopies);
             if (!matched.empty())
-                layer = "aggressive";
+                layer = "score";
         }
 
         // Layer 3: windowed match across the sender's recent lines (see helper),
@@ -1393,13 +1617,12 @@ private:
                 layer = "windowed";
         }
 
-        // Layer 4: keyword-independent repetition match (see helper), for ads
-        // no keyword covers yet.
-        if (matched.empty())
+        // Layer 4: keyword-independent repetition verdict, for ads no keyword
+        // covers yet (see the _chatRepeatCount comment).
+        if (matched.empty() && repeatCopies != 0 && repeatCopies >= _chatRepeatCount)
         {
-            matched = FindRepeatedMessage(player, msg);
-            if (!matched.empty())
-                layer = "repeat";
+            matched = Acore::StringFormat("same message x{} within {}s", repeatCopies, _chatRepeatSeconds);
+            layer = "repeat";
         }
 
         if (matched.empty())

@@ -94,22 +94,86 @@ EnhancedSupport.ChatFilter.Message = "Your message was blocked because it contai
 
 #
 #    EnhancedSupport.AggressiveMaxLevel
-#        Description: Catches spam that evades the plain filter by spacing letters out or
-#                     swapping in look-alike characters (digits for letters), in both mail
-#                     and chat, but only from low-level senders (gold-seller bots are
-#                     throwaway low-level characters) whose text also contains a web marker
-#                     (.com, www, http, "dot com", ...) or a search callout (google, youtube -
-#                     ads that avoid writing a URL and tell the reader to search instead;
-#                     "discord" is not one, so guild ads stay safe). Both conditions are
-#                     required, which
-#                     keeps normal phrases like "LFG tank for Onyxia" from matching. Set to
-#                     the highest character level this aggressive pass applies to. Matches
-#                     reuse each filter's own action (MailFilter.Action / ChatFilter.Action).
-#        Default:     0 - Disabled (no aggressive pass; only exact substring matching runs)
+#        Description: Level gate for the collapsed-text passes: the scored pass (below), the
+#                     chat window pass and the chat repeat pass only run for senders at or
+#                     below this level. Gold-seller bots are throwaway low-level characters,
+#                     and restricting the looser matching to them keeps normal players out
+#                     of its false-positive reach. Matches reuse each filter's own action
+#                     (MailFilter.Action / ChatFilter.Action).
+#        Default:     0 - Disabled (no collapsed-text passes; only exact substring matching runs)
 #                     e.g. 5 - Apply to characters at or below level 5
 #
 
 EnhancedSupport.AggressiveMaxLevel = 0
+
+#
+#    EnhancedSupport.Score.Threshold
+#        Description: The scored pass catches spam that evades the plain filter by spacing
+#                     letters out, swapping in look-alike characters (digits for letters) or
+#                     padding the ad with filler words, in both mail and chat. The text is
+#                     collapsed (lowercased, separators stripped, look-alike characters
+#                     folded) and scored: a configured keyword found in the collapsed text
+#                     is required and scores KeywordPoints, and each further signal adds
+#                     points on top -
+#                       - a web marker (.com, www, http, "dot com", ...) or a search callout
+#                         (google, youtube, "search engine" - ads that avoid writing a URL
+#                         tell the reader to search instead; "discord" is not one, so guild
+#                         ads stay safe): MarkerPoints;
+#                       - each weak keyword found (see WeakKeywordPoints below);
+#                       - each extra copy of the same message in the repeat window (chat
+#                         only, see RepeatCopyPoints below).
+#                     The filter's action fires once the total reaches this threshold.
+#                     Because the keyword is mandatory, the side signals can never act
+#                     alone: "LFG tank for Onyxia" carries no keyword and never scores.
+#                     With the default points, a keyword plus any one strong signal - or
+#                     two weaker ones - reaches the default threshold of 4. Only runs for
+#                     senders at or below EnhancedSupport.AggressiveMaxLevel.
+#        Default:     4
+#                     0 - Disabled (no scored pass)
+#
+#    EnhancedSupport.Score.KeywordPoints
+#        Description: Points scored by the required keyword hit. Keep it below Threshold:
+#                     at or above it a collapsed keyword hit alone acts, and despaced normal
+#                     phrases can fuse into keywords, so that setting trades real false
+#                     positives for reach (a warning is logged when set that way).
+#        Default:     2
+#
+#    EnhancedSupport.Score.MarkerPoints
+#        Description: Points added when the collapsed text carries a web marker or search
+#                     callout (see Threshold above for the list).
+#        Default:     2
+#
+#    EnhancedSupport.Score.WeakKeywordPoints
+#    EnhancedSupport.Score.WeakKeywordMaxPoints
+#        Description: Points added per weak keyword found in the collapsed text, and the cap
+#                     on the total points from weak keywords. Weak keywords are contextual
+#                     words that are suspicious next to a real keyword but far too common to
+#                     act on alone. They are stored in the auth DB table
+#                     enhanced_support_weak_keywords, not in this file; manage them with:
+#                       .support weakkeyword add <keyword>
+#                       .support weakkeyword remove <keyword>
+#                       .support list weakkeywords
+#        Default:     1 (per weak keyword)
+#                     2 (cap)
+#
+#    EnhancedSupport.Score.RepeatCopyPoints
+#    EnhancedSupport.Score.RepeatCopyMaxPoints
+#        Description: Points added per extra copy of the same message within the repeat
+#                     window, and the cap on those points. Copies are only counted while the
+#                     repeat pass is enabled (ChatFilter.RepeatCount / RepeatSeconds), which
+#                     also keeps its own standalone verdict at RepeatCount copies. Chat
+#                     only; mail carries no repetition history.
+#        Default:     1 (per copy after the first)
+#                     2 (cap)
+#
+
+EnhancedSupport.Score.Threshold = 4
+EnhancedSupport.Score.KeywordPoints = 2
+EnhancedSupport.Score.MarkerPoints = 2
+EnhancedSupport.Score.WeakKeywordPoints = 1
+EnhancedSupport.Score.WeakKeywordMaxPoints = 2
+EnhancedSupport.Score.RepeatCopyPoints = 1
+EnhancedSupport.Score.RepeatCopyMaxPoints = 2
 
 #
 #    EnhancedSupport.ChatFilter.WindowSize
@@ -117,11 +181,11 @@ EnhancedSupport.AggressiveMaxLevel = 0
 #                     line is harmless on its own but together they form an ad (a URL
 #                     broken up and padded with unrelated chatter). Keeps the
 #                     last few SAY/YELL/EMOTE lines per sender and matches the joined
-#                     text (with both the strict and the aggressive/collapsed passes).
+#                     text (with both the strict and the scored passes).
 #                     This is the maximum number of lines kept per sender. The pass only
 #                     runs when it is at least 2, WindowSeconds is set, and the sender is
 #                     at or below EnhancedSupport.AggressiveMaxLevel (so it inherits the
-#                     same low-level + web-marker safeguards and reuses ChatFilter.Action).
+#                     same low-level and multi-signal safeguards and reuses ChatFilter.Action).
 #        Default:     0 - Disabled (no cross-message matching)
 #                     e.g. 5 - Join up to the sender's last 5 lines
 #
@@ -153,7 +217,10 @@ EnhancedSupport.ChatFilter.WindowSeconds = 0
 #                     doesn't reset the count. RepeatCount must be at least 2 and RepeatSeconds
 #                     above 0 for the pass to run; it also requires
 #                     EnhancedSupport.AggressiveMaxLevel, since max-level players legitimately
-#                     repeat trade/LFM lines, and reuses ChatFilter.Action.
+#                     repeat trade/LFM lines, and reuses ChatFilter.Action. Copies counted
+#                     here also feed the scored pass (see Score.RepeatCopyPoints), so a
+#                     repeated ad that also carries a keyword is acted on before the
+#                     RepeatCount-th copy.
 #        Default:     0 - Disabled
 #                     e.g. RepeatCount = 3, RepeatSeconds = 60 - act on the 3rd copy within 60s
 #

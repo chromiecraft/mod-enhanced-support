@@ -39,6 +39,15 @@ namespace EnhancedSupport
     void AddKeyword(std::string const& normalized);
     void RemoveKeyword(std::string const& normalized);
 
+    // Weak keywords for the scored pass: contextual words that add points next
+    // to a real keyword hit but never act alone. Stored and managed like the
+    // mail keywords (auth DB table enhanced_support_weak_keywords).
+    void LoadWeakKeywords();
+    std::vector<std::string> const& GetWeakKeywords();
+    bool HasWeakKeyword(std::string const& normalized);
+    void AddWeakKeyword(std::string const& normalized);
+    void RemoveWeakKeyword(std::string const& normalized);
+
     // Email substrings matched against an account's email at character creation.
     // Stored and matched like keywords (trimmed, lowercased, case-insensitive substring).
     void LoadEmailPatterns();
@@ -57,6 +66,17 @@ namespace EnhancedSupport
     uint8 GetChatFilterAction();
     std::string_view GetChatFilterActionName();
     uint8 GetAggressiveMaxLevel();
+
+    // Scored pass: points needed to act (0 = pass disabled), and the points per
+    // signal - the required keyword hit, a URL/search marker, each weak keyword
+    // (with a cap) and each extra copy of the same message (with a cap).
+    uint32 GetScoreThreshold();
+    uint32 GetScoreKeywordPoints();
+    uint32 GetScoreMarkerPoints();
+    uint32 GetScoreWeakKeywordPoints();
+    uint32 GetScoreWeakKeywordMaxPoints();
+    uint32 GetScoreRepeatCopyPoints();
+    uint32 GetScoreRepeatCopyMaxPoints();
 
     // Cross-message chat window: max lines kept per sender, and how long (seconds)
     // a line stays in the window. Both 0 when the windowed pass is disabled.
