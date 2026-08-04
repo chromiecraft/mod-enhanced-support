@@ -1493,6 +1493,24 @@ private:
         if (_goldFilterThresholdCopper == 0 || money < _goldFilterThresholdCopper)
             return;
 
+        // The core fires the CanSendMail hook once per attached item, so a single
+        // mail with N attachments would log N times. Collapse repeated calls for
+        // the same mail; mail handling runs on the world thread, so no locking.
+        static ObjectGuid lastSender;
+        static ObjectGuid lastReceiver;
+        static uint32 lastMoney = 0;
+        static Milliseconds lastTime = 0ms;
+
+        Milliseconds const now = GameTime::GetGameTimeMS();
+        if (player->GetGUID() == lastSender && receiverGuid == lastReceiver
+            && money == lastMoney && now - lastTime < 1s)
+            return;
+
+        lastSender = player->GetGUID();
+        lastReceiver = receiverGuid;
+        lastMoney = money;
+        lastTime = now;
+
         std::string const amount = EnhancedSupport::FormatMoney(money);
         std::string const threshold = EnhancedSupport::FormatMoney(_goldFilterThresholdCopper);
         std::string const receiverName = ResolveCharacterName(receiverGuid);
