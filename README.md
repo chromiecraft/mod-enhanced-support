@@ -186,14 +186,27 @@ outside its last-known range - the pattern of credentials leaked elsewhere being
 tried on abandoned accounts. Alerts are written under `module.enhancedsupport`
 and, when mod-chat-transmitter is available, relayed to Discord (sharing the
 chat filter's channel), identifying the account, the new IP, the previous IP and
-how long the account was inactive. Detection only: the login is never blocked
-and the account is not restricted.
+how long the account was inactive. Report-only by default: the login is never
+blocked and the account is not restricted unless the ban escalation below is
+enabled.
 
 `EnhancedSupport.DormantLogin.Days` sets the inactivity threshold and is the
 feature's master switch (`0` disables it). `EnhancedSupport.DormantLogin.IpMaskBits`
 sets how much of the IPv4 address must match to count as the same network
 (a CIDR prefix length, default `24`); `0` ignores the IP and reports every
 dormant-account login.
+
+`EnhancedSupport.DormantLogin.BanMinutes` (default `0`, report-only) escalates a
+detection into a lock and delayed ban: the account is immediately barred from
+sending mail, trading and opening the auction house (in both directions for
+trades), so no gold or items can be moved off it; the player sees
+`EnhancedSupport.DormantLogin.LockMessage` in red at login and on every blocked
+attempt, telling them to open a Discord ticket; and once the configured minutes pass the
+account is permanently banned under the module's ban author
+(`EnhancedSupport.MailFilter.BanAuthor`). A GM who verifies the owner through
+the ticket lifts the ban with the regular unban command. The pending lock list
+is in-memory: a restart clears it, and the next login from the foreign IP
+triggers detection again.
 
 The baseline (last world login and IP per account) lives in the auth DB table
 `enhanced_support_account_activity`, shared across all realms. It is seeded from
@@ -391,6 +404,8 @@ Examples: `.support keyword add wowgold`, `.support list keywords`,
 | `EnhancedSupport.EmailFilter.Enable` | `1`       | Master switch for the account email-pattern check at character creation; runs once at least one pattern is configured |
 | `EnhancedSupport.DormantLogin.Days` | `0`       | Report accounts logging in after at least this many days of inactivity (see IpMaskBits); `0` disables the check |
 | `EnhancedSupport.DormantLogin.IpMaskBits` | `24` | IPv4 CIDR prefix length that must match the last-known IP to skip the report; `0` ignores the IP entirely |
+| `EnhancedSupport.DormantLogin.BanMinutes` | `0` | Lock a flagged account (no mail/trade/AH) and permanently ban it this many minutes after detection; `0` reports only |
+| `EnhancedSupport.DormantLogin.LockMessage` | *(see conf)* | Red warning shown to the locked player at login and on each blocked action; empty locks silently |
 | `EnhancedSupport.ArenaTelemetry.Enable` | `0`   | Record arena combat telemetry (casts, cancels, failed casts, aura applies/removes, position samples) to `enhanced_support_arena_events` for offline cheat detection |
 | `EnhancedSupport.ArenaTelemetry.RatedOnly` | `1` | Record rated matches only; `0` also records skirmishes |
 | `EnhancedSupport.ArenaTelemetry.PositionSampleMs` | `500` | Interval between position/orientation samples (min 100); `0` disables sampling, cast/aura events remain |

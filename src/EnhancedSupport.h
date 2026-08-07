@@ -138,11 +138,14 @@ namespace EnhancedSupport
 
     // Dormant-login detection: report (server log + Discord) when an account
     // logs in after at least Days of inactivity from an IP outside its
-    // last-known /IpMaskBits range. Detection only; nothing is blocked. State
+    // last-known /IpMaskBits range. With BanMinutes at 0 that is detection
+    // only; above 0 the account is locked (mail/trade/AH refused), warned to
+    // open a ticket, and permanently banned once the minutes run out. State
     // lives in dormant_login.cpp; LoadConfig() calls LoadDormantLoginConfig().
     void LoadDormantLoginConfig();
     uint32 GetDormantLoginDays();
     uint32 GetDormantLoginIpMaskBits();
+    uint32 GetDormantLoginBanMinutes();
 
     // Arena telemetry (cheat detection): raw cast/aura/position events from live
     // arena matches, written to the characters DB table enhanced_support_arena_events

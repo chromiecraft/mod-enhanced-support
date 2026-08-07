@@ -251,11 +251,15 @@ public:
         else
         {
             uint32 const dormantMaskBits = EnhancedSupport::GetDormantLoginIpMaskBits();
-            handler->PSendSysMessage("  Dormant login alert: after {} day(s) inactive, {}",
+            uint32 const dormantBanMinutes = EnhancedSupport::GetDormantLoginBanMinutes();
+            handler->PSendSysMessage("  Dormant login alert: after {} day(s) inactive, {}{}",
                 dormantDays,
                 dormantMaskBits == 0
                     ? "from any IP"
-                    : Acore::StringFormat("from an IP outside the last-known /{}", dormantMaskBits));
+                    : Acore::StringFormat("from an IP outside the last-known /{}", dormantMaskBits),
+                dormantBanMinutes == 0
+                    ? " (report only)"
+                    : Acore::StringFormat(" (lock + ban after {} minute(s))", dormantBanMinutes));
         }
 
         handler->PSendSysMessage("  Ban author: {}", EnhancedSupport::GetBanAuthor());

@@ -46,7 +46,8 @@ EnhancedSupport.MailFilter.Message = "Your mail was blocked because it contains 
 
 #
 #    EnhancedSupport.MailFilter.BanAuthor
-#        Description: Author name recorded on bans issued by Action 3/4. Also used as the
+#        Description: Author name recorded on bans issued by this module (the mail, chat and
+#                     invite filters' Action 3/4 and the dormant-login ban). Also used as the
 #                     default search term for ".enhancedsupport bans" so a bare call lists
 #                     the bans this module issued. Avoid setting it to a real character name.
 #        Default:     "SupportModule"
@@ -470,8 +471,9 @@ EnhancedSupport.EmailFilter.Enable = 1
 #                     below) - the pattern of credentials leaked on other servers being
 #                     tried on abandoned accounts. Reports go to the server log and to
 #                     Discord (via mod-chat-transmitter's ChatFilter alias, when available).
-#                     Detection only: the login is never blocked and the account is not
-#                     restricted. Also gated by EnhancedSupport.Enable.
+#                     Report-only by default: the login is never blocked and the account is
+#                     not restricted unless DormantLogin.BanMinutes below is set. Also gated
+#                     by EnhancedSupport.Enable.
 #                     The baseline (last world login + IP per account) lives in the auth DB
 #                     table enhanced_support_account_activity, seeded from the account table
 #                     when the module's SQL update is applied and refreshed on every world
@@ -495,6 +497,36 @@ EnhancedSupport.DormantLogin.Days = 0
 #
 
 EnhancedSupport.DormantLogin.IpMaskBits = 24
+
+#
+#    EnhancedSupport.DormantLogin.BanMinutes
+#        Description: Escalate a dormant-login detection from a report to a lock and delayed
+#                     ban. When above 0, a flagged account is immediately locked - outgoing
+#                     mail, trades and the auction house are refused, so no gold or items can
+#                     leave the account - the player is warned in red (see LockMessage below)
+#                     at login and on every blocked attempt, and the account is permanently
+#                     banned this many minutes after detection. The ban uses the module's
+#                     ban author (MailFilter.BanAuthor); lift it with the regular unban
+#                     command after verifying the owner through their ticket. The pending
+#                     lock list is in-memory: a server restart clears it, and the next login
+#                     from the foreign IP triggers detection again. Has no effect unless
+#                     EnhancedSupport.DormantLogin.Days is set.
+#        Default:     0 - Report only (no lock, no ban)
+#                     e.g. 30 - Lock immediately, ban 30 minutes after detection
+#
+
+EnhancedSupport.DormantLogin.BanMinutes = 0
+
+#
+#    EnhancedSupport.DormantLogin.LockMessage
+#        Description: Message shown to the player (in red system text) when their account is
+#                     locked by BanMinutes above: once at login and again whenever a blocked
+#                     mail, trade or auction house attempt is made. Leave empty to lock
+#                     silently.
+#        Default:     "Suspicious activity has been detected on your account. The account will be locked - please open a Discord ticket to verify your identity and restore access."
+#
+
+EnhancedSupport.DormantLogin.LockMessage = "Suspicious activity has been detected on your account. The account will be locked - please open a Discord ticket to verify your identity and restore access."
 
 #
 #    EnhancedSupport.ArenaTelemetry.Enable
