@@ -199,9 +199,10 @@ dormant-account login.
 `EnhancedSupport.DormantLogin.BanMinutes` (default `0`, report-only) escalates a
 detection into a lock and delayed ban: the account is immediately barred from
 sending mail, trading and opening the auction house (in both directions for
-trades), so no gold or items can be moved off it; the player sees
-`EnhancedSupport.DormantLogin.LockMessage` in red at login and on every blocked
-attempt, telling them to open a Discord ticket; and once the configured minutes pass the
+trades), so no gold or items can be moved off it; the player sees a red warning
+at login and on every blocked attempt, telling them to open a Discord ticket
+(`acore_string` entries `90101`/`90102`, shipped with translations for all
+client languages; edit them in the world DB to change the text); and once the configured minutes pass the
 account is permanently banned under the module's ban author
 (`EnhancedSupport.MailFilter.BanAuthor`). A GM who verifies the owner through
 the ticket lifts the ban with the regular unban command. The pending lock list
@@ -404,8 +405,7 @@ Examples: `.support keyword add wowgold`, `.support list keywords`,
 | `EnhancedSupport.EmailFilter.Enable` | `1`       | Master switch for the account email-pattern check at character creation; runs once at least one pattern is configured |
 | `EnhancedSupport.DormantLogin.Days` | `0`       | Report accounts logging in after at least this many days of inactivity (see IpMaskBits); `0` disables the check |
 | `EnhancedSupport.DormantLogin.IpMaskBits` | `24` | IPv4 CIDR prefix length that must match the last-known IP to skip the report; `0` ignores the IP entirely |
-| `EnhancedSupport.DormantLogin.BanMinutes` | `0` | Lock a flagged account (no mail/trade/AH) and permanently ban it this many minutes after detection; `0` reports only |
-| `EnhancedSupport.DormantLogin.LockMessage` | *(see conf)* | Red warning shown to the locked player at login and on each blocked action; empty locks silently |
+| `EnhancedSupport.DormantLogin.BanMinutes` | `0` | Lock a flagged account (no mail/trade/AH) and permanently ban it this many minutes after detection; `0` reports only. The warning texts are `acore_string` entries `90101`/`90102` |
 | `EnhancedSupport.ArenaTelemetry.Enable` | `0`   | Record arena combat telemetry (casts, cancels, failed casts, aura applies/removes, position samples) to `enhanced_support_arena_events` for offline cheat detection |
 | `EnhancedSupport.ArenaTelemetry.RatedOnly` | `1` | Record rated matches only; `0` also records skirmishes |
 | `EnhancedSupport.ArenaTelemetry.PositionSampleMs` | `500` | Interval between position/orientation samples (min 100); `0` disables sampling, cast/aura events remain |
@@ -431,8 +431,8 @@ Examples: `.support keyword add wowgold`, `.support list keywords`,
 - `data/sql/db-auth`, `data/sql/db-world`, `data/sql/db-characters` —
   `base`/`updates` SQL applied automatically by the module DB updater. The mail
   keyword, email pattern and account activity tables live in `db-auth/updates`;
-  the `.support` command help rows in `db-world/updates`; the arena telemetry
-  event table in `db-characters/updates`.
+  the `.support` command help rows and the dormant-lock `acore_string` texts in
+  `db-world/updates`; the arena telemetry event table in `db-characters/updates`.
 
 ## License
 

@@ -68,14 +68,18 @@ namespace
 {
     constexpr char const* DORMANT_BAN_REASON = "Dormant login: connection from a new IP range";
 
+    // acore_string entries shipped in data/sql/db-world/updates/enhanced_support_strings.sql.
+    enum DormantLoginStrings : uint32
+    {
+        LANG_ES_DORMANT_LOCK_WARNING    = 90101,
+        LANG_ES_DORMANT_TARGET_NO_TRADE = 90102
+    };
+
     // OnLastIpUpdate fires on a network thread while config reloads happen on
     // the world thread, hence atomics.
     std::atomic<uint32> _dormantDays{0};
     std::atomic<uint32> _dormantIpMaskBits{24};
     std::atomic<uint32> _dormantBanMinutes{0};
-
-    // Written on config (re)load and read by player hooks, all world thread.
-    std::string _dormantLockMessage;
 
     // Accounts locked pending their ban: account id -> epoch seconds when the
     // ban fires. Inserted from the auth network thread, consumed on the world
@@ -96,10 +100,8 @@ namespace
 
     void SendLockWarning(Player* player)
     {
-        if (_dormantLockMessage.empty())
-            return;
-
-        ChatHandler(player->GetSession()).SendSysMessage("|cffff0000" + _dormantLockMessage + "|r");
+        ChatHandler handler(player->GetSession());
+        handler.SendSysMessage("|cffff0000" + handler.GetAcoreString(LANG_ES_DORMANT_LOCK_WARNING) + "|r");
     }
 
     bool ParseIPv4(std::string const& text, uint32& out)
@@ -153,8 +155,6 @@ namespace EnhancedSupport
         _dormantDays.store(sConfigMgr->GetOption<uint32>("EnhancedSupport.DormantLogin.Days", 0));
         _dormantIpMaskBits.store(std::min<uint32>(sConfigMgr->GetOption<uint32>("EnhancedSupport.DormantLogin.IpMaskBits", 24), 32));
         _dormantBanMinutes.store(sConfigMgr->GetOption<uint32>("EnhancedSupport.DormantLogin.BanMinutes", 0));
-        _dormantLockMessage = sConfigMgr->GetOption<std::string>("EnhancedSupport.DormantLogin.LockMessage",
-            "Suspicious activity has been detected on your account. The account will be locked - please open a Discord ticket to verify your identity and restore access.");
     }
 
     uint32 GetDormantLoginDays()
@@ -303,7 +303,8 @@ public:
         // to fence any more than it may send them.
         if (target && IsAccountLocked(target->GetSession()->GetAccountId()))
         {
-            ChatHandler(player->GetSession()).SendSysMessage("|cffff0000That player cannot trade right now.|r");
+            ChatHandler handler(player->GetSession());
+            handler.SendSysMessage("|cffff0000" + handler.GetAcoreString(LANG_ES_DORMANT_TARGET_NO_TRADE) + "|r");
             return false;
         }
 
