@@ -479,6 +479,8 @@ EnhancedSupport.EmailFilter.Enable = 1
 #                     when the module's SQL update is applied and refreshed on every world
 #                     login - including while this option is 0, so enabling it later works
 #                     against a current baseline.
+#                     Reports name the country of both IPs (with a flag on Discord); see
+#                     DormantLogin.ShowCountry below.
 #        Default:     0 - Disabled (no dormant-login check)
 #                     e.g. 90 - Report dormant accounts returning after 90+ days (~3 months)
 #
@@ -517,6 +519,21 @@ EnhancedSupport.DormantLogin.IpMaskBits = 24
 #
 
 EnhancedSupport.DormantLogin.BanMinutes = 0
+
+#
+#    EnhancedSupport.DormantLogin.ShowCountry
+#        Description: Name the country of both IPs in the Discord report, flag emoji
+#                     included ("1.2.3.4 <flag> Brisbane, Australia"). The server log
+#                     always keeps the bare IPs. Needs IPLocationFile in worldserver.conf
+#                     to point at an IP2Location LITE IPv4 CSV - DB1 for countries, DB3 to
+#                     also get the city. When 0 the lookup is skipped entirely and the
+#                     Discord report carries the bare IPs too, as it does for addresses the
+#                     database cannot resolve (IPv6, reserved ranges).
+#        Default:     1 - Enabled
+#                     0 - Disabled (bare IPs, no lookup)
+#
+
+EnhancedSupport.DormantLogin.ShowCountry = 1
 
 #
 #    EnhancedSupport.ArenaTelemetry.Enable

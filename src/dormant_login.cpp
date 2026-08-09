@@ -23,6 +23,7 @@
 #include "Config.h"
 #include "DatabaseEnv.h"
 #include "GameTime.h"
+#include "IPLocation.h"
 #include "Log.h"
 #include "Player.h"
 #include "ScriptMgr.h"
@@ -80,6 +81,7 @@ namespace
     std::atomic<uint32> _dormantDays{0};
     std::atomic<uint32> _dormantIpMaskBits{24};
     std::atomic<uint32> _dormantBanMinutes{0};
+    std::atomic<bool> _dormantShowCountry{true};
 
     // Accounts locked pending their ban: account id -> epoch seconds when the
     // ban fires. Inserted from the auth network thread, consumed on the world
@@ -146,6 +148,98 @@ namespace
         uint32 const mask = maskBits >= 32 ? 0xFFFFFFFFu : ~(0xFFFFFFFFu >> maskBits);
         return (ipA & mask) == (ipB & mask);
     }
+
+// Geolocation only feeds the Discord note; the server log stays IP-only.
+#ifdef HAS_CHAT_TRANSMITTER
+    // Flag emoji for a 2-letter ISO country code ("br" -> BR regional indicator
+    // pair), empty for anything else. IP2Location stores the code lowercase.
+    std::string CountryFlag(std::string const& code)
+    {
+        if (code.size() != 2)
+            return "";
+
+        std::string flag;
+        for (char c : code)
+        {
+            if (c >= 'A' && c <= 'Z')
+                c = static_cast<char>(c - 'A' + 'a');
+            if (c < 'a' || c > 'z')
+                return "";
+
+            // U+1F1E6 (regional indicator A) + offset, encoded as UTF-8.
+            uint32 const cp = 0x1F1E6 + static_cast<uint32>(c - 'a');
+            flag += static_cast<char>(0xF0 | (cp >> 18));
+            flag += static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+            flag += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+            flag += static_cast<char>(0x80 | (cp & 0x3F));
+        }
+        return flag;
+    }
+
+    // Splits the country field back into the CSV columns it was built from.
+    // IP2Location quotes every field, so once the core's reader has stripped the
+    // quotes a separator is a comma with nothing after it, while a comma inside
+    // a name always has a space ("Palestine, State of").
+    std::vector<std::string> SplitCsvFields(std::string const& text)
+    {
+        std::vector<std::string> parts;
+        size_t start = 0;
+        for (size_t i = 0; i < text.size(); ++i)
+        {
+            if (text[i] == ',' && (i + 1 == text.size() || text[i + 1] != ' '))
+            {
+                parts.push_back(text.substr(start, i - start));
+                start = i + 1;
+            }
+        }
+        parts.push_back(text.substr(start));
+        return parts;
+    }
+
+    // The core's IP2Location reader keeps the first three CSV columns and glues
+    // everything after them into CountryName: just the country for a DB1 file,
+    // "Australia,Queensland,Brisbane" for DB3. This turns that into
+    // "Brisbane, Australia"; "-" marks a column IP2Location has no data for.
+    std::string PlaceName(std::string const& countryName)
+    {
+        std::vector<std::string> const parts = SplitCsvFields(countryName);
+        std::string const& country = parts[0];
+        if (country.empty() || country == "-")
+            return "";
+
+        std::string const city = parts.size() >= 3 ? parts[2] : "";
+        if (city.empty() || city == "-" || city == country)
+            return country;
+
+        return city + ", " + country;
+    }
+
+    // "1.2.3.4" -> "1.2.3.4 <flag> Brisbane, Australia" for the Discord note;
+    // the server log keeps the bare IP, since a log file is grepped by address
+    // and the emoji do not survive every viewer. The bare IP is also returned
+    // when the location cannot be resolved: geolocation needs IPLocationFile
+    // pointed at an IP2Location CSV, covers IPv4 only, and leaves reserved
+    // ranges unassigned.
+    std::string DescribeIp(std::string const& ip)
+    {
+        if (!EnhancedSupport::GetDormantLoginShowCountry())
+            return ip;
+
+        IpLocationRecord const* location = sIPLocation->GetLocationRecord(ip);
+        if (!location)
+            return ip;
+
+        std::string const place = PlaceName(location->CountryName);
+        if (place.empty())
+            return ip;
+
+        std::string const flag = CountryFlag(location->CountryCode);
+        if (flag.empty())
+            return Acore::StringFormat("{} ({})", ip, place);
+
+        return Acore::StringFormat("{} {} {}", ip, flag, place);
+    }
+#endif
 }
 
 namespace EnhancedSupport
@@ -155,6 +249,7 @@ namespace EnhancedSupport
         _dormantDays.store(sConfigMgr->GetOption<uint32>("EnhancedSupport.DormantLogin.Days", 0));
         _dormantIpMaskBits.store(std::min<uint32>(sConfigMgr->GetOption<uint32>("EnhancedSupport.DormantLogin.IpMaskBits", 24), 32));
         _dormantBanMinutes.store(sConfigMgr->GetOption<uint32>("EnhancedSupport.DormantLogin.BanMinutes", 0));
+        _dormantShowCountry.store(sConfigMgr->GetOption<bool>("EnhancedSupport.DormantLogin.ShowCountry", true));
     }
 
     uint32 GetDormantLoginDays()
@@ -170,6 +265,11 @@ namespace EnhancedSupport
     uint32 GetDormantLoginBanMinutes()
     {
         return _dormantBanMinutes.load(std::memory_order_relaxed);
+    }
+
+    bool GetDormantLoginShowCountry()
+    {
+        return _dormantShowCountry.load(std::memory_order_relaxed);
     }
 }
 
@@ -238,9 +338,9 @@ public:
                         "🌐 New IP: {} | inactive for {} day(s)\n"
                         "🕓 Last seen: {} from {}\n"
                         "{}",
-                        username, accountId, ip, inactiveDays,
+                        username, accountId, DescribeIp(ip), inactiveDays,
                         lastSeenText.empty() ? "unknown" : lastSeenText,
-                        lastIp.empty() ? "unknown IP" : lastIp,
+                        lastIp.empty() ? "unknown IP" : DescribeIp(lastIp),
                         banMinutes > 0
                             ? Acore::StringFormat(
                                 "🔒 Mail, trades and auction house are locked; the account will be "

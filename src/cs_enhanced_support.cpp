@@ -260,6 +260,8 @@ public:
                 dormantBanMinutes == 0
                     ? " (report only)"
                     : Acore::StringFormat(" (lock + ban after {} minute(s))", dormantBanMinutes));
+            handler->PSendSysMessage("  Dormant login country lookup: {}",
+                EnhancedSupport::GetDormantLoginShowCountry() ? "on" : "off");
         }
 
         handler->PSendSysMessage("  Ban author: {}", EnhancedSupport::GetBanAuthor());

@@ -190,6 +190,13 @@ how long the account was inactive. Report-only by default: the login is never
 blocked and the account is not restricted unless the ban escalation below is
 enabled.
 
+The Discord alert names the country of both IPs with a flag emoji while
+`EnhancedSupport.DormantLogin.ShowCountry` is on and the core's `IPLocationFile`
+option in `worldserver.conf` points at an IP2Location LITE IPv4 CSV - DB1 for
+countries, DB3 to also get the city. The server log always keeps the bare IPs,
+as does Discord with the option off or for addresses the database cannot resolve
+(IPv6, reserved ranges).
+
 `EnhancedSupport.DormantLogin.Days` sets the inactivity threshold and is the
 feature's master switch (`0` disables it). `EnhancedSupport.DormantLogin.IpMaskBits`
 sets how much of the IPv4 address must match to count as the same network
@@ -406,6 +413,7 @@ Examples: `.support keyword add wowgold`, `.support list keywords`,
 | `EnhancedSupport.DormantLogin.Days` | `0`       | Report accounts logging in after at least this many days of inactivity (see IpMaskBits); `0` disables the check |
 | `EnhancedSupport.DormantLogin.IpMaskBits` | `24` | IPv4 CIDR prefix length that must match the last-known IP to skip the report; `0` ignores the IP entirely |
 | `EnhancedSupport.DormantLogin.BanMinutes` | `0` | Lock a flagged account (no mail/trade/AH) and permanently ban it this many minutes after detection; `0` reports only. The warning texts are `acore_string` entries `90101`/`90102` |
+| `EnhancedSupport.DormantLogin.ShowCountry` | `1` | Name the country (and city, with a DB3 database) of both IPs in the Discord report, flag included; the server log keeps bare IPs. `0` skips the IP2Location lookup. Needs the core's `IPLocationFile` set in `worldserver.conf` |
 | `EnhancedSupport.ArenaTelemetry.Enable` | `0`   | Record arena combat telemetry (casts, cancels, failed casts, aura applies/removes, position samples) to `enhanced_support_arena_events` for offline cheat detection |
 | `EnhancedSupport.ArenaTelemetry.RatedOnly` | `1` | Record rated matches only; `0` also records skirmishes |
 | `EnhancedSupport.ArenaTelemetry.PositionSampleMs` | `500` | Interval between position/orientation samples (min 100); `0` disables sampling, cast/aura events remain |

@@ -147,6 +147,10 @@ namespace EnhancedSupport
     uint32 GetDormantLoginIpMaskBits();
     uint32 GetDormantLoginBanMinutes();
 
+    // Whether reports name the country (and city) of the IPs involved, with a
+    // flag emoji on Discord. Off skips the IP2Location lookup entirely.
+    bool GetDormantLoginShowCountry();
+
     // Arena telemetry (cheat detection): raw cast/aura/position events from live
     // arena matches, written to the characters DB table enhanced_support_arena_events
     // for offline reaction-time and facing analysis. State lives in
