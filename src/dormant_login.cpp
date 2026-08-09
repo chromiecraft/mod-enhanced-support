@@ -69,6 +69,15 @@ namespace
 {
     constexpr char const* DORMANT_BAN_REASON = "Dormant login: connection from a new IP range";
 
+    // How far the new IP's location has to match the last-known one for the lock
+    // and ban to be waived (the report itself always goes out).
+    enum DormantBanSkipLocation : uint32
+    {
+        BAN_SKIP_LOCATION_NONE    = 0,
+        BAN_SKIP_LOCATION_COUNTRY = 1,
+        BAN_SKIP_LOCATION_REGION  = 2
+    };
+
     // acore_string entries shipped in data/sql/db-world/updates/enhanced_support_strings.sql.
     enum DormantLoginStrings : uint32
     {
@@ -82,6 +91,7 @@ namespace
     std::atomic<uint32> _dormantIpMaskBits{24};
     std::atomic<uint32> _dormantBanMinutes{0};
     std::atomic<bool> _dormantShowCountry{true};
+    std::atomic<uint32> _dormantBanSkipLocation{0};
 
     // Accounts locked pending their ban: account id -> epoch seconds when the
     // ban fires. Inserted from the auth network thread, consumed on the world
@@ -149,7 +159,67 @@ namespace
         return (ipA & mask) == (ipB & mask);
     }
 
-// Geolocation only feeds the Discord note; the server log stays IP-only.
+    // Splits the country field back into the CSV columns it was built from.
+    // IP2Location quotes every field, so once the core's reader has stripped the
+    // quotes a separator is a comma with nothing after it, while a comma inside
+    // a name always has a space ("Palestine, State of").
+    std::vector<std::string> SplitCsvFields(std::string const& text)
+    {
+        std::vector<std::string> parts;
+        size_t start = 0;
+        for (size_t i = 0; i < text.size(); ++i)
+        {
+            if (text[i] == ',' && (i + 1 == text.size() || text[i + 1] != ' '))
+            {
+                parts.push_back(text.substr(start, i - start));
+                start = i + 1;
+            }
+        }
+        parts.push_back(text.substr(start));
+        return parts;
+    }
+
+    // The core's IP2Location reader keeps the first three CSV columns and glues
+    // everything after them into CountryName: just the country for a DB1 file,
+    // "Australia,Queensland,Brisbane" for DB3. Index 0 is the country, 1 the
+    // region and 2 the city; the last two need a DB3 database.
+    std::string LocationField(std::string const& countryName, size_t index)
+    {
+        std::vector<std::string> const parts = SplitCsvFields(countryName);
+        if (index >= parts.size())
+            return "";
+
+        // IP2Location writes "-" where it has no data.
+        return parts[index] == "-" ? "" : parts[index];
+    }
+
+    // Whether both IPs sit in the same place, to the depth the config asks for.
+    // Only a positive match waives the lock, so anything unknown - no database,
+    // IPv6, an unassigned range, or a region asked of a DB1 database that has
+    // none - counts as a mismatch and leaves the escalation in place.
+    bool SameLocation(std::string const& a, std::string const& b, uint32 level)
+    {
+        if (level == BAN_SKIP_LOCATION_NONE)
+            return false;
+
+        IpLocationRecord const* locA = sIPLocation->GetLocationRecord(a);
+        IpLocationRecord const* locB = sIPLocation->GetLocationRecord(b);
+        if (!locA || !locB)
+            return false;
+
+        std::string const country = LocationField(locA->CountryName, 0);
+        if (country.empty() || country != LocationField(locB->CountryName, 0))
+            return false;
+
+        if (level < BAN_SKIP_LOCATION_REGION)
+            return true;
+
+        std::string const region = LocationField(locA->CountryName, 1);
+        return !region.empty() && region == LocationField(locB->CountryName, 1);
+    }
+
+// The flag and the place name only feed the Discord note; the server log
+// stays IP-only.
 #ifdef HAS_CHAT_TRANSMITTER
     // Flag emoji for a 2-letter ISO country code ("br" -> BR regional indicator
     // pair), empty for anything else. IP2Location stores the code lowercase.
@@ -176,39 +246,15 @@ namespace
         return flag;
     }
 
-    // Splits the country field back into the CSV columns it was built from.
-    // IP2Location quotes every field, so once the core's reader has stripped the
-    // quotes a separator is a comma with nothing after it, while a comma inside
-    // a name always has a space ("Palestine, State of").
-    std::vector<std::string> SplitCsvFields(std::string const& text)
-    {
-        std::vector<std::string> parts;
-        size_t start = 0;
-        for (size_t i = 0; i < text.size(); ++i)
-        {
-            if (text[i] == ',' && (i + 1 == text.size() || text[i + 1] != ' '))
-            {
-                parts.push_back(text.substr(start, i - start));
-                start = i + 1;
-            }
-        }
-        parts.push_back(text.substr(start));
-        return parts;
-    }
-
-    // The core's IP2Location reader keeps the first three CSV columns and glues
-    // everything after them into CountryName: just the country for a DB1 file,
-    // "Australia,Queensland,Brisbane" for DB3. This turns that into
-    // "Brisbane, Australia"; "-" marks a column IP2Location has no data for.
+    // "Australia,Queensland,Brisbane" -> "Brisbane, Australia".
     std::string PlaceName(std::string const& countryName)
     {
-        std::vector<std::string> const parts = SplitCsvFields(countryName);
-        std::string const& country = parts[0];
-        if (country.empty() || country == "-")
+        std::string const country = LocationField(countryName, 0);
+        if (country.empty())
             return "";
 
-        std::string const city = parts.size() >= 3 ? parts[2] : "";
-        if (city.empty() || city == "-" || city == country)
+        std::string const city = LocationField(countryName, 2);
+        if (city.empty() || city == country)
             return country;
 
         return city + ", " + country;
@@ -250,6 +296,8 @@ namespace EnhancedSupport
         _dormantIpMaskBits.store(std::min<uint32>(sConfigMgr->GetOption<uint32>("EnhancedSupport.DormantLogin.IpMaskBits", 24), 32));
         _dormantBanMinutes.store(sConfigMgr->GetOption<uint32>("EnhancedSupport.DormantLogin.BanMinutes", 0));
         _dormantShowCountry.store(sConfigMgr->GetOption<bool>("EnhancedSupport.DormantLogin.ShowCountry", true));
+        _dormantBanSkipLocation.store(std::min<uint32>(
+            sConfigMgr->GetOption<uint32>("EnhancedSupport.DormantLogin.BanSkipLocation", 0), BAN_SKIP_LOCATION_REGION));
     }
 
     uint32 GetDormantLoginDays()
@@ -270,6 +318,11 @@ namespace EnhancedSupport
     bool GetDormantLoginShowCountry()
     {
         return _dormantShowCountry.load(std::memory_order_relaxed);
+    }
+
+    uint32 GetDormantLoginBanSkipLocation()
+    {
+        return _dormantBanSkipLocation.load(std::memory_order_relaxed);
     }
 }
 
@@ -313,7 +366,14 @@ public:
 
                 if (newIpRange)
                 {
-                    uint32 const banMinutes = EnhancedSupport::GetDormantLoginBanMinutes();
+                    // A returning owner usually reconnects from the same country
+                    // on a new ISP address, a thief rarely does. Where the
+                    // config trusts that, the report still goes out but the
+                    // account is left alone.
+                    uint32 const skipLevel = EnhancedSupport::GetDormantLoginBanSkipLocation();
+                    bool const sameLocation = SameLocation(lastIp, ip, skipLevel);
+                    uint32 const banMinutes = sameLocation ? 0 : EnhancedSupport::GetDormantLoginBanMinutes();
+
                     if (banMinutes > 0)
                     {
                         std::lock_guard<std::mutex> guard(_pendingBansMutex);
@@ -321,6 +381,11 @@ public:
                         _pendingBans.emplace(accountId, now + uint64(banMinutes) * MINUTE);
                         _pendingBanCount.store(static_cast<uint32>(_pendingBans.size()), std::memory_order_relaxed);
                     }
+
+                    // Named in both reports so a GM can tell a waived lock from
+                    // a realm that never had the escalation enabled.
+                    std::string const matchedOn = skipLevel >= BAN_SKIP_LOCATION_REGION
+                        ? "country and region" : "country";
 
                     uint64 const inactiveDays = (now - lastSeen) / DAY;
                     LOG_INFO("module.enhancedsupport",
@@ -330,7 +395,9 @@ public:
                         lastIp.empty() ? "unknown IP" : lastIp,
                         banMinutes > 0
                             ? Acore::StringFormat(" - account locked, ban in {} minute(s)", banMinutes)
-                            : "");
+                            : sameLocation
+                                ? Acore::StringFormat(" - lock skipped, same {} as the last-known IP", matchedOn)
+                                : "");
 
 #ifdef HAS_CHAT_TRANSMITTER
                     std::string const note = Acore::StringFormat(
@@ -345,7 +412,11 @@ public:
                             ? Acore::StringFormat(
                                 "🔒 Mail, trades and auction house are locked; the account will be "
                                 "permanently banned in {} minute(s). Unban after verifying the owner.", banMinutes)
-                            : "🔎 Detection only, nothing was blocked. Verify whether the owner returned.");
+                            : sameLocation
+                                ? Acore::StringFormat(
+                                    "🔎 Detection only: same {} as the last-known IP, so the lock was "
+                                    "skipped. Verify whether the owner returned.", matchedOn)
+                                : "🔎 Detection only, nothing was blocked. Verify whether the owner returned.");
                     sChatTransmitter->QueueNotification("ChatFilter", note);
 #endif
                 }

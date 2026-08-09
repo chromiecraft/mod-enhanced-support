@@ -151,6 +151,11 @@ namespace EnhancedSupport
     // flag emoji on Discord. Off skips the IP2Location lookup entirely.
     bool GetDormantLoginShowCountry();
 
+    // How closely the new IP must match the last-known one's location for the
+    // lock and ban to be waived: 0 never, 1 same country, 2 same country and
+    // region. The report goes out either way.
+    uint32 GetDormantLoginBanSkipLocation();
+
     // Arena telemetry (cheat detection): raw cast/aura/position events from live
     // arena matches, written to the characters DB table enhanced_support_arena_events
     // for offline reaction-time and facing analysis. State lives in

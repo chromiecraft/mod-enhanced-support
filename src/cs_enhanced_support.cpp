@@ -262,6 +262,17 @@ public:
                     : Acore::StringFormat(" (lock + ban after {} minute(s))", dormantBanMinutes));
             handler->PSendSysMessage("  Dormant login country lookup: {}",
                 EnhancedSupport::GetDormantLoginShowCountry() ? "on" : "off");
+
+            if (dormantBanMinutes > 0)
+            {
+                uint32 const dormantBanSkip = EnhancedSupport::GetDormantLoginBanSkipLocation();
+                handler->PSendSysMessage("  Dormant login lock skipped when: {}",
+                    dormantBanSkip == 0
+                        ? "never"
+                        : dormantBanSkip == 1
+                            ? "the new IP is in the same country"
+                            : "the new IP is in the same country and region");
+            }
         }
 
         handler->PSendSysMessage("  Ban author: {}", EnhancedSupport::GetBanAuthor());

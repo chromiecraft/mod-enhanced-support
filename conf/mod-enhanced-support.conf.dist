@@ -536,6 +536,27 @@ EnhancedSupport.DormantLogin.BanMinutes = 0
 EnhancedSupport.DormantLogin.ShowCountry = 1
 
 #
+#    EnhancedSupport.DormantLogin.BanSkipLocation
+#        Description: Waive the DormantLogin.BanMinutes lock and ban when the new IP is in
+#                     the same place as the account's last-known one - a returning owner
+#                     usually reconnects from the same country on a different ISP address,
+#                     a thief with leaked credentials rarely does. The report still goes to
+#                     the log and Discord, and says the lock was skipped; only the
+#                     restriction and the ban are dropped.
+#                     Needs IPLocationFile in worldserver.conf; level 2 needs a DB3 database,
+#                     as DB1 carries no regions. Only a positive match waives the lock:
+#                     an address neither database can place (IPv6, reserved ranges) keeps
+#                     the escalation. Independent of DormantLogin.ShowCountry, which only
+#                     controls what the reports print.
+#                     Has no effect while DormantLogin.BanMinutes is 0.
+#        Default:     0 - Never skip (every detection locks and bans)
+#                     1 - Skip when the country matches
+#                     2 - Skip when the country and the region match
+#
+
+EnhancedSupport.DormantLogin.BanSkipLocation = 0
+
+#
 #    EnhancedSupport.ArenaTelemetry.Enable
 #        Description: Record raw combat telemetry from live arena matches into the characters
 #                     DB table `enhanced_support_arena_events`, for offline cheat detection
