@@ -29,6 +29,7 @@
 #include "ScriptMgr.h"
 #include "StringFormat.h"
 #include "WorldSession.h"
+#include "WorldSessionMgr.h"
 
 #include <atomic>
 #include <mutex>
@@ -92,6 +93,7 @@ namespace
     std::atomic<uint32> _dormantBanMinutes{0};
     std::atomic<bool> _dormantShowCountry{true};
     std::atomic<uint32> _dormantBanSkipLocation{0};
+    std::atomic<uint32> _dormantWarnSeconds{5};
 
     // Accounts locked pending their ban: account id -> epoch seconds when the
     // ban fires. Inserted from the auth network thread, consumed on the world
@@ -110,9 +112,9 @@ namespace
         return _pendingBans.find(accountId) != _pendingBans.end();
     }
 
-    void SendLockWarning(Player* player)
+    void SendLockWarning(WorldSession* session)
     {
-        ChatHandler handler(player->GetSession());
+        ChatHandler handler(session);
         handler.SendSysMessage("|cffff0000" + handler.GetAcoreString(LANG_ES_DORMANT_LOCK_WARNING) + "|r");
     }
 
@@ -298,6 +300,7 @@ namespace EnhancedSupport
         _dormantShowCountry.store(sConfigMgr->GetOption<bool>("EnhancedSupport.DormantLogin.ShowCountry", true));
         _dormantBanSkipLocation.store(std::min<uint32>(
             sConfigMgr->GetOption<uint32>("EnhancedSupport.DormantLogin.BanSkipLocation", 0), BAN_SKIP_LOCATION_REGION));
+        _dormantWarnSeconds.store(sConfigMgr->GetOption<uint32>("EnhancedSupport.DormantLogin.WarnSeconds", 5));
     }
 
     uint32 GetDormantLoginDays()
@@ -323,6 +326,11 @@ namespace EnhancedSupport
     uint32 GetDormantLoginBanSkipLocation()
     {
         return _dormantBanSkipLocation.load(std::memory_order_relaxed);
+    }
+
+    uint32 GetDormantLoginWarnSeconds()
+    {
+        return _dormantWarnSeconds.load(std::memory_order_relaxed);
     }
 }
 
@@ -446,7 +454,7 @@ public:
     void OnPlayerLogin(Player* player) override
     {
         if (EnhancedSupport::IsEnabled() && IsAccountLocked(player->GetSession()->GetAccountId()))
-            SendLockWarning(player);
+            SendLockWarning(player->GetSession());
     }
 
     bool OnPlayerCanSendMail(Player* player, ObjectGuid /*receiverGuid*/, ObjectGuid /*mailbox*/,
@@ -455,7 +463,7 @@ public:
         if (!EnhancedSupport::IsEnabled() || !IsAccountLocked(player->GetSession()->GetAccountId()))
             return true;
 
-        SendLockWarning(player);
+        SendLockWarning(player->GetSession());
         return false;
     }
 
@@ -466,7 +474,7 @@ public:
 
         if (IsAccountLocked(player->GetSession()->GetAccountId()))
         {
-            SendLockWarning(player);
+            SendLockWarning(player->GetSession());
             return false;
         }
 
@@ -496,14 +504,15 @@ public:
             return true;
 
         if (Player* player = session->GetPlayer())
-            SendLockWarning(player);
+            SendLockWarning(player->GetSession());
         return false;
     }
 };
 
-// Executes the pending bans once their timer runs out. Runs on the world
-// update loop; the account is banned by name (works whether or not the player
-// is still online - BanAccount kicks any live session itself).
+// Repeats the lock warning to locked players and executes the pending bans
+// once their timer runs out. Runs on the world update loop; the account is
+// banned by name (works whether or not the player is still online -
+// BanAccount kicks any live session itself).
 class EnhancedSupportDormantBanWorker : public WorldScript
 {
 public:
@@ -516,13 +525,23 @@ public:
         if (_pendingBanCount.load(std::memory_order_relaxed) == 0)
             return;
 
+        if (!EnhancedSupport::IsEnabled())
+            return;
+
+        if (uint32 const warnSeconds = EnhancedSupport::GetDormantLoginWarnSeconds())
+        {
+            _warnTimerMs += diff;
+            if (_warnTimerMs >= warnSeconds * IN_MILLISECONDS)
+            {
+                _warnTimerMs = 0;
+                WarnLockedPlayers();
+            }
+        }
+
         _timerMs += diff;
         if (_timerMs < 1000)
             return;
         _timerMs = 0;
-
-        if (!EnhancedSupport::IsEnabled())
-            return;
 
         uint64 const now = static_cast<uint64>(GameTime::GetGameTime().count());
         std::vector<uint32> due;
@@ -567,7 +586,24 @@ public:
     }
 
 private:
+    void WarnLockedPlayers()
+    {
+        std::vector<uint32> locked;
+        {
+            std::lock_guard<std::mutex> guard(_pendingBansMutex);
+            locked.reserve(_pendingBans.size());
+            for (auto const& pending : _pendingBans)
+                locked.push_back(pending.first);
+        }
+
+        for (uint32 accountId : locked)
+            if (WorldSession* session = sWorldSessionMgr->FindSession(accountId))
+                if (session->GetPlayer())
+                    SendLockWarning(session);
+    }
+
     uint32 _timerMs = 0;
+    uint32 _warnTimerMs = 0;
 };
 
 void AddEnhancedSupportDormantLoginScripts()

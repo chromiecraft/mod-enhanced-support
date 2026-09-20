@@ -156,6 +156,10 @@ namespace EnhancedSupport
     // region. The report goes out either way.
     uint32 GetDormantLoginBanSkipLocation();
 
+    // How often the red lock warning is repeated to a locked player while they
+    // stay online, in seconds; 0 warns only at login and on blocked actions.
+    uint32 GetDormantLoginWarnSeconds();
+
     // Arena telemetry (cheat detection): raw cast/aura/position events from live
     // arena matches, written to the characters DB table enhanced_support_arena_events
     // for offline reaction-time and facing analysis. State lives in

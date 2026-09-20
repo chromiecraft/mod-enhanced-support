@@ -557,6 +557,20 @@ EnhancedSupport.DormantLogin.ShowCountry = 1
 EnhancedSupport.DormantLogin.BanSkipLocation = 0
 
 #
+#    EnhancedSupport.DormantLogin.WarnSeconds
+#        Description: How often the red lock warning (acore_string 90101) is repeated to a
+#                     locked player while they stay online, in seconds. The warning is
+#                     always shown at login and on every blocked mail, trade or auction
+#                     attempt; this repeats it in between so the player cannot miss it.
+#                     Has no effect while EnhancedSupport.DormantLogin.BanMinutes is 0,
+#                     since no account is locked then.
+#        Default:     5
+#                     0 - Only warn at login and on blocked attempts
+#
+
+EnhancedSupport.DormantLogin.WarnSeconds = 5
+
+#
 #    EnhancedSupport.ArenaTelemetry.Enable
 #        Description: Record raw combat telemetry from live arena matches into the characters
 #                     DB table `enhanced_support_arena_events`, for offline cheat detection

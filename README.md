@@ -214,7 +214,9 @@ account is permanently banned under the module's ban author
 (`EnhancedSupport.MailFilter.BanAuthor`). A GM who verifies the owner through
 the ticket lifts the ban with the regular unban command. The pending lock list
 is in-memory: a restart clears it, and the next login from the foreign IP
-triggers detection again.
+triggers detection again. `EnhancedSupport.DormantLogin.WarnSeconds` (default
+`5`) repeats the red warning that often while the player stays online; `0`
+warns only at login and on blocked attempts.
 
 `EnhancedSupport.DormantLogin.BanSkipLocation` softens that escalation for
 players who simply changed ISP: `1` waives the lock and ban when the new IP is
@@ -421,6 +423,7 @@ Examples: `.support keyword add wowgold`, `.support list keywords`,
 | `EnhancedSupport.DormantLogin.Days` | `0`       | Report accounts logging in after at least this many days of inactivity (see IpMaskBits); `0` disables the check |
 | `EnhancedSupport.DormantLogin.IpMaskBits` | `24` | IPv4 CIDR prefix length that must match the last-known IP to skip the report; `0` ignores the IP entirely |
 | `EnhancedSupport.DormantLogin.BanMinutes` | `0` | Lock a flagged account (no mail/trade/AH) and permanently ban it this many minutes after detection; `0` reports only. The warning texts are `acore_string` entries `90101`/`90102` |
+| `EnhancedSupport.DormantLogin.WarnSeconds` | `5` | Repeat the red lock warning to a locked player this often while they stay online, in seconds; `0` warns only at login and on blocked attempts |
 | `EnhancedSupport.DormantLogin.BanSkipLocation` | `0` | Waive the `BanMinutes` lock and ban when the new IP is in the same country (`1`) or the same country and region (`2`) as the last-known one; `0` never waives. The report still goes out. Level `2` needs a DB3 database |
 | `EnhancedSupport.DormantLogin.ShowCountry` | `1` | Name the country (and city, with a DB3 database) of both IPs in the Discord report, flag included; the server log keeps bare IPs. `0` skips the IP2Location lookup. Needs the core's `IPLocationFile` set in `worldserver.conf` |
 | `EnhancedSupport.ArenaTelemetry.Enable` | `0`   | Record arena combat telemetry (casts, cancels, failed casts, aura applies/removes, position samples) to `enhanced_support_arena_events` for offline cheat detection |
