@@ -36,13 +36,16 @@
 #include "ObjectGuid.h"
 #include "ObjectMgr.h"
 #include "Player.h"
+#include "Realm.h"
 #include "ScriptMgr.h"
 #include "SharedDefines.h"
 #include "SocialMgr.h"
 #include "StringConvert.h"
 #include "StringFormat.h"
 #include "TaskScheduler.h"
+#include "Timer.h"
 #include "Util.h"
+#include "World.h"
 #include "WorldSession.h"
 
 #include <algorithm>
@@ -1387,13 +1390,77 @@ private:
 
 #ifdef HAS_CHAT_TRANSMITTER
         std::string note = Acore::StringFormat(
-            "🔄 **{}**\n```\n{}\n```",
-            _startupNoticeMessage, GitRevision::GetFullVersion());
+            "🔄 **{}**\n```\n{}\n```{}\n👥 Peak players: {}",
+            _startupNoticeMessage, GitRevision::GetFullVersion(),
+            FormatPreviousSession(), FormatPeakPlayers());
         sChatTransmitter->QueueNotification("ServerStatus", note);
         LOG_INFO("module.enhancedsupport", "StartupNotice: queued Discord server-start notice (revision {})", GitRevision::GetHash());
 #else
         LOG_WARN("module.enhancedsupport", "StartupNotice is enabled but mod-chat-transmitter is not available; no Discord notice will be sent.");
 #endif
+    }
+
+    // How the previous session ended and why, mirroring ".server info". Empty
+    // when there is no previous `uptime` row (first start on this realm).
+    static std::string FormatPreviousSession()
+    {
+        Optional<PreviousSessionInfo> const& previous = sWorld->GetPreviousSessionInfo();
+        if (!previous)
+            return {};
+
+        std::string uptime = secsToTimeString(previous->Uptime.count());
+        std::string outcome;
+        if (previous->Crashed)
+        {
+            std::string lastSeen = Acore::Time::TimeToTimestampStr(previous->StartTime + previous->Uptime);
+            // A crash with a type set happened after the world loop had already stopped
+            if (previous->Type == SHUTDOWN_TYPE_UNKNOWN)
+                outcome = Acore::StringFormat("💥 Previous session crashed after {} (last online {})", uptime, lastSeen);
+            else
+                outcome = Acore::StringFormat("💥 Previous session crashed during {} after {} (last online {})",
+                    ShutdownTypeName(previous->Type), uptime, lastSeen);
+        }
+        else if (previous->Type == SHUTDOWN_TYPE_UNKNOWN)
+            outcome = Acore::StringFormat("⏱️ Previous session ran for {}", uptime);
+        else
+            outcome = Acore::StringFormat("⏱️ Previous session ended by {} after {}", ShutdownTypeName(previous->Type), uptime);
+
+        if (!previous->Reason.empty())
+            outcome += Acore::StringFormat("\n📝 Reason: {}", previous->Reason);
+
+        return "\n" + outcome;
+    }
+
+    // After a crash the previous session's peak is only as fresh as the core's
+    // last periodic `uptime` write (worldserver UpdateUptimeInterval).
+    static std::string FormatPeakPlayers()
+    {
+        uint32 const lifetimePeak = sWorld->GetLifetimeMaxPlayerCount();
+
+        Optional<PreviousSessionInfo> const& previous = sWorld->GetPreviousSessionInfo();
+        if (!previous)
+            return Acore::StringFormat("{} all time", lifetimePeak);
+
+        QueryResult result = LoginDatabase.Query(
+            "SELECT maxplayers FROM uptime WHERE realmid = {} AND starttime = {}",
+            realm.Id.Realm, previous->StartTime.count());
+        if (!result)
+            return Acore::StringFormat("{} all time", lifetimePeak);
+
+        return Acore::StringFormat("{} last session, {} all time", result->Fetch()[0].Get<uint16>(), lifetimePeak);
+    }
+
+    static std::string_view ShutdownTypeName(SessionShutdownType type)
+    {
+        switch (type)
+        {
+            case SHUTDOWN_TYPE_RESTART:
+                return "restart";
+            case SHUTDOWN_TYPE_ERROR:
+                return "error";
+            default:
+                return "shutdown";
+        }
     }
 
     TaskScheduler _scheduler;

@@ -671,7 +671,10 @@ EnhancedSupport.ArenaTelemetry.Suspect.Percent = 60
 #
 #    EnhancedSupport.StartupNotice.Enable
 #        Description: Post a Discord notice when the world server has started, showing the
-#                     git revision the server is running. Requires mod-chat-transmitter to
+#                     git revision the server is running, how the previous session ended
+#                     (restart, shutdown or crash, with its reason if one was given) and the
+#                     peak player count of the previous session and of all time. Requires
+#                     mod-chat-transmitter to
 #                     be installed and enabled (it is the transport). Also gated by
 #                     EnhancedSupport.Enable.
 #        Default:     0 (disabled)

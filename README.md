@@ -434,7 +434,7 @@ Examples: `.support keyword add wowgold`, `.support list keywords`,
 | `EnhancedSupport.ArenaTelemetry.Suspect.ReactionMs` | `180` | Latency-adjusted reaction at/below this is "fast" |
 | `EnhancedSupport.ArenaTelemetry.Suspect.MinEvents` | `4` | Minimum fast reactions in a match to flag a player |
 | `EnhancedSupport.ArenaTelemetry.Suspect.Percent` | `60` | Minimum share of the player's reactions that must be fast to flag |
-| `EnhancedSupport.StartupNotice.Enable` | `0`     | Post a Discord notice with the git revision on server start (needs mod-chat-transmitter) |
+| `EnhancedSupport.StartupNotice.Enable` | `0`     | Post a Discord notice on server start with the git revision, how the previous session ended (restart, shutdown or crash, plus its reason) and the peak player count of the previous session and of all time (needs mod-chat-transmitter) |
 | `EnhancedSupport.StartupNotice.Message`| `Server restarted!` | Headline for the startup notice; the full version line is shown below it in a code block |
 | `EnhancedSupport.StartupNotice.DelaySeconds`| `5`  | Seconds to wait after startup before sending, so the relay's WebSocket is up |
 
