@@ -226,6 +226,12 @@ and says the lock was skipped. Only a positive match waives it, so an address
 the database cannot place keeps the escalation; level `2` therefore needs a DB3
 database, since DB1 carries no regions.
 
+`EnhancedSupport.DormantLogin.DiscordSkipLocation` uses the same levels to keep
+same-place reports off Discord: `1` skips the Discord note when the country
+matches, `2` when country and region both match (`0`, the default, always
+sends). The server log still records every detection, and a detection that
+locked the account is always sent, so a lock never goes unannounced.
+
 The baseline (last world login and IP per account) lives in the auth DB table
 `enhanced_support_account_activity`, shared across all realms. It is seeded from
 the `account` table when the module's SQL update is applied and refreshed on
@@ -425,6 +431,7 @@ Examples: `.support keyword add wowgold`, `.support list keywords`,
 | `EnhancedSupport.DormantLogin.BanMinutes` | `0` | Lock a flagged account (no mail/trade/AH) and permanently ban it this many minutes after detection; `0` reports only. The warning texts are `acore_string` entries `90101`/`90102` |
 | `EnhancedSupport.DormantLogin.WarnSeconds` | `5` | Repeat the red lock warning to a locked player this often while they stay online, in seconds; `0` warns only at login and on blocked attempts |
 | `EnhancedSupport.DormantLogin.BanSkipLocation` | `0` | Waive the `BanMinutes` lock and ban when the new IP is in the same country (`1`) or the same country and region (`2`) as the last-known one; `0` never waives. The report still goes out. Level `2` needs a DB3 database |
+| `EnhancedSupport.DormantLogin.DiscordSkipLocation` | `0` | Keep the Discord report off when the new IP is in the same country (`1`) or the same country and region (`2`) as the last-known one; `0` always sends. The server log keeps every report, and a locked account is always sent. Level `2` needs a DB3 database |
 | `EnhancedSupport.DormantLogin.ShowCountry` | `1` | Name the country (and city, with a DB3 database) of both IPs in the Discord report, flag included; the server log keeps bare IPs. `0` skips the IP2Location lookup. Needs the core's `IPLocationFile` set in `worldserver.conf` |
 | `EnhancedSupport.ArenaTelemetry.Enable` | `0`   | Record arena combat telemetry (casts, cancels, failed casts, aura applies/removes, position samples) to `enhanced_support_arena_events` for offline cheat detection |
 | `EnhancedSupport.ArenaTelemetry.RatedOnly` | `1` | Record rated matches only; `0` also records skirmishes |

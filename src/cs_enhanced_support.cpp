@@ -263,6 +263,14 @@ public:
             handler->PSendSysMessage("  Dormant login country lookup: {}",
                 EnhancedSupport::GetDormantLoginShowCountry() ? "on" : "off");
 
+            uint32 const dormantDiscordSkip = EnhancedSupport::GetDormantLoginDiscordSkipLocation();
+            handler->PSendSysMessage("  Dormant login Discord note skipped when: {}",
+                dormantDiscordSkip == 0
+                    ? "never"
+                    : dormantDiscordSkip == 1
+                        ? "the new IP is in the same country and the account was not locked"
+                        : "the new IP is in the same country and region and the account was not locked");
+
             if (dormantBanMinutes > 0)
             {
                 uint32 const dormantBanSkip = EnhancedSupport::GetDormantLoginBanSkipLocation();

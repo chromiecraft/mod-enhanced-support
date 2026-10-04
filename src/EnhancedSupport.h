@@ -156,6 +156,10 @@ namespace EnhancedSupport
     // region. The report goes out either way.
     uint32 GetDormantLoginBanSkipLocation();
 
+    // Same levels as BanSkipLocation, but for the Discord note: a matching
+    // location keeps the report in the server log only. Never hides a lock.
+    uint32 GetDormantLoginDiscordSkipLocation();
+
     // How often the red lock warning is repeated to a locked player while they
     // stay online, in seconds; 0 warns only at login and on blocked actions.
     uint32 GetDormantLoginWarnSeconds();

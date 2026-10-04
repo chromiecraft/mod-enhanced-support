@@ -557,6 +557,23 @@ EnhancedSupport.DormantLogin.ShowCountry = 1
 EnhancedSupport.DormantLogin.BanSkipLocation = 0
 
 #
+#    EnhancedSupport.DormantLogin.DiscordSkipLocation
+#        Description: Keep a dormant-login report off Discord when the new IP is in the same
+#                     place as the account's last-known one. The report still goes to the
+#                     server log. A detection that locked the account (DormantLogin.BanMinutes
+#                     above 0 and not waived by DormantLogin.BanSkipLocation) is always sent,
+#                     so a lock never goes unannounced.
+#                     Needs IPLocationFile in worldserver.conf; level 2 needs a DB3 database,
+#                     as DB1 carries no regions. Only a positive match hides the report: an
+#                     address the database cannot place (IPv6, reserved ranges) is still sent.
+#        Default:     0 - Always send to Discord
+#                     1 - Skip when the country matches
+#                     2 - Skip when the country and the region match
+#
+
+EnhancedSupport.DormantLogin.DiscordSkipLocation = 0
+
+#
 #    EnhancedSupport.DormantLogin.WarnSeconds
 #        Description: How often the red lock warning (acore_string 90101) is repeated to a
 #                     locked player while they stay online, in seconds. The warning is

@@ -93,6 +93,7 @@ namespace
     std::atomic<uint32> _dormantBanMinutes{0};
     std::atomic<bool> _dormantShowCountry{true};
     std::atomic<uint32> _dormantBanSkipLocation{0};
+    std::atomic<uint32> _dormantDiscordSkipLocation{0};
     std::atomic<uint32> _dormantWarnSeconds{5};
 
     // Accounts locked pending their ban: account id -> epoch seconds when the
@@ -300,6 +301,8 @@ namespace EnhancedSupport
         _dormantShowCountry.store(sConfigMgr->GetOption<bool>("EnhancedSupport.DormantLogin.ShowCountry", true));
         _dormantBanSkipLocation.store(std::min<uint32>(
             sConfigMgr->GetOption<uint32>("EnhancedSupport.DormantLogin.BanSkipLocation", 0), BAN_SKIP_LOCATION_REGION));
+        _dormantDiscordSkipLocation.store(std::min<uint32>(
+            sConfigMgr->GetOption<uint32>("EnhancedSupport.DormantLogin.DiscordSkipLocation", 0), BAN_SKIP_LOCATION_REGION));
         _dormantWarnSeconds.store(sConfigMgr->GetOption<uint32>("EnhancedSupport.DormantLogin.WarnSeconds", 5));
     }
 
@@ -326,6 +329,11 @@ namespace EnhancedSupport
     uint32 GetDormantLoginBanSkipLocation()
     {
         return _dormantBanSkipLocation.load(std::memory_order_relaxed);
+    }
+
+    uint32 GetDormantLoginDiscordSkipLocation()
+    {
+        return _dormantDiscordSkipLocation.load(std::memory_order_relaxed);
     }
 
     uint32 GetDormantLoginWarnSeconds()
@@ -425,7 +433,12 @@ public:
                                     "🔎 Detection only: same {} as the last-known IP, so the lock was "
                                     "skipped. Verify whether the owner returned.", matchedOn)
                                 : "🔎 Detection only, nothing was blocked. Verify whether the owner returned.");
-                    sChatTransmitter->QueueNotification("ChatFilter", note);
+                    // A locked account always reaches Discord, or a GM would only
+                    // learn of it from the ban note once the timer runs out.
+                    bool const quietOnDiscord = banMinutes == 0
+                        && SameLocation(lastIp, ip, EnhancedSupport::GetDormantLoginDiscordSkipLocation());
+                    if (!quietOnDiscord)
+                        sChatTransmitter->QueueNotification("ChatFilter", note);
 #endif
                 }
             }
