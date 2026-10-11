@@ -129,6 +129,12 @@ namespace EnhancedSupport
     uint32 GetAuctionFilterGreyMinPrice();
     bool GetAuctionFilterOnListing();
 
+    // Auction filter vendor rule: flag items NPC vendors sell for gold when priced at
+    // this many times the vendor price or more (0 disables), and only at/above the
+    // given minimum price (copper).
+    uint32 GetAuctionFilterVendorMultiplier();
+    uint32 GetAuctionFilterVendorMinPrice();
+
     // Seconds of inactivity before a seller's batched Discord auction notification is
     // sent; 0 sends one notification per auction (no batching).
     uint32 GetAuctionBatchSeconds();

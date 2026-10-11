@@ -54,7 +54,9 @@
 #include <chrono>
 #include <ctime>
 #include <deque>
+#include <limits>
 #include <unordered_map>
+#include <unordered_set>
 
 // Optional integration: relay blocked-mail events to Discord via mod-chat-transmitter.
 #if __has_include("mod-chat-transmitter/src/ChatTransmitter.h")
@@ -217,6 +219,16 @@ namespace
     uint32 _auctionFilterGreyMinPriceCopper = 0; // grey-specific price (copper) at/above which to flag
     bool _auctionFilterOnListing = false;        // also flag suspicious listings, not just completed sales
     uint32 _auctionBatchSeconds = 0;             // coalesce a seller's flagged auctions into one Discord notice; 0 = one per item
+
+    // Items any NPC vendor sells for gold alone with unlimited stock have a hard price
+    // ceiling, so auctioning one far above it has no real buyer. Flagged at any quality
+    // when the price is >= VendorMultiplier x the vendor price and >= VendorMinPrice.
+    uint32 _auctionFilterVendorMultiplier = 0;      // 0 disables the vendor rule
+    uint32 _auctionFilterVendorMinPriceCopper = 0;
+    // Built lazily from ObjectMgr's vendor cache (not loaded yet at config load time);
+    // cleared on config reload so a `.reload config` also picks up vendor changes.
+    std::unordered_set<uint32> _vendorGoldItems;
+    bool _vendorGoldItemsBuilt = false;
 
     bool _startupNoticeEnabled = false;
     std::string _startupNoticeMessage;
@@ -733,6 +745,7 @@ namespace
         uint32 quality;
         uint32 price;
         uint32 vendorValue;
+        uint32 vendorPrice; // what an NPC vendor charges for the stack; 0 when no vendor sells it
         std::string buyer;  // formatted buyer line; empty for listings
     };
 
@@ -763,6 +776,9 @@ namespace
                 "🏷️ [{}](https://wowgaming.altervista.org/aowow/?item={}) (id {}, {}) x{} — {} (vendor value {})",
                 it.itemName, it.itemId, it.itemId, QualityName(it.quality), it.count,
                 EnhancedSupport::FormatMoney(it.price), EnhancedSupport::FormatMoney(it.vendorValue));
+
+            if (it.vendorPrice)
+                itemsBlock += Acore::StringFormat("\n   🏪 Sold by NPC vendors for {}", EnhancedSupport::FormatMoney(it.vendorPrice));
 
             if (!it.buyer.empty())
                 itemsBlock += Acore::StringFormat("\n   🛒 Buyer: {}", it.buyer);
@@ -852,16 +868,53 @@ namespace
     // True when the auction filter is configured to flag anything at all.
     bool AuctionFilterActive()
     {
-        return _auctionFilterMaxQuality >= 0 || _auctionFilterAlwaysLogGrey || _auctionFilterGreyMinPriceCopper != 0;
+        return _auctionFilterMaxQuality >= 0 || _auctionFilterAlwaysLogGrey || _auctionFilterGreyMinPriceCopper != 0
+            || _auctionFilterVendorMultiplier != 0;
     }
 
-    // True when an auction of `proto` at `price` should be flagged. Grey items are
-    // checked against their own rules first (the always-on switch and the grey-specific
-    // price), then any item is checked against the general MaxQuality / MinPrice.
-    bool IsSuspiciousAuction(ItemTemplate const* proto, uint32 price)
+    void BuildVendorGoldItems()
+    {
+        _vendorGoldItems.clear();
+        for (auto const& [entry, creatureTemplate] : *sObjectMgr->GetCreatureTemplates())
+            if (VendorItemData const* vendorItems = sObjectMgr->GetNpcVendorItemList(entry))
+                for (VendorItem const* vendorItem : vendorItems->m_items)
+                    if (vendorItem->maxcount == 0 && vendorItem->ExtendedCost == 0)
+                        _vendorGoldItems.insert(vendorItem->item);
+
+        _vendorGoldItemsBuilt = true;
+    }
+
+    // What an NPC vendor charges for `count` of `proto` (rounded up), or 0 when no
+    // vendor sells it for gold alone with unlimited stock. BuyPrice buys BuyCount units.
+    uint32 VendorPriceFor(ItemTemplate const* proto, uint32 count)
+    {
+        if (!proto || proto->BuyPrice <= 0)
+            return 0;
+
+        if (!_vendorGoldItemsBuilt)
+            BuildVendorGoldItems();
+
+        if (!_vendorGoldItems.contains(proto->ItemId))
+            return 0;
+
+        uint64 const buyCount = std::max<uint32>(proto->BuyCount, 1);
+        uint64 const price = (uint64(proto->BuyPrice) * count + buyCount - 1) / buyCount;
+        return static_cast<uint32>(std::min<uint64>(price, std::numeric_limits<uint32>::max()));
+    }
+
+    // True when an auction of `count` x `proto` at `price` should be flagged. Grey items
+    // are checked against their own rules first (the always-on switch and the grey-specific
+    // price), then vendor-sold items against their vendor price, then any item against the
+    // general MaxQuality / MinPrice.
+    bool IsSuspiciousAuction(ItemTemplate const* proto, uint32 count, uint32 price)
     {
         if (!proto)
             return false;
+
+        if (_auctionFilterVendorMultiplier != 0 && price >= _auctionFilterVendorMinPriceCopper)
+            if (uint32 const vendorPrice = VendorPriceFor(proto, count))
+                if (uint64(price) >= uint64(vendorPrice) * _auctionFilterVendorMultiplier)
+                    return true;
 
         if (proto->Quality == ITEM_QUALITY_POOR)
         {
@@ -1242,6 +1295,16 @@ namespace EnhancedSupport
         return _auctionFilterOnListing;
     }
 
+    uint32 GetAuctionFilterVendorMultiplier()
+    {
+        return _auctionFilterVendorMultiplier;
+    }
+
+    uint32 GetAuctionFilterVendorMinPrice()
+    {
+        return _auctionFilterVendorMinPriceCopper;
+    }
+
     uint32 GetAuctionBatchSeconds()
     {
         return _auctionBatchSeconds;
@@ -1319,6 +1382,9 @@ namespace EnhancedSupport
         _auctionFilterOnListing = sConfigMgr->GetOption<bool>("EnhancedSupport.AuctionFilter.OnListing", false);
         _auctionFilterMinPriceCopper = ParseMoneyOption("EnhancedSupport.AuctionFilter.MinPrice");
         _auctionFilterGreyMinPriceCopper = ParseMoneyOption("EnhancedSupport.AuctionFilter.GreyMinPrice");
+        _auctionFilterVendorMultiplier = sConfigMgr->GetOption<uint32>("EnhancedSupport.AuctionFilter.VendorMultiplier", 0);
+        _auctionFilterVendorMinPriceCopper = ParseMoneyOption("EnhancedSupport.AuctionFilter.VendorMinPrice");
+        _vendorGoldItemsBuilt = false;
 
         _emailFilterEnabled = sConfigMgr->GetOption<bool>("EnhancedSupport.EmailFilter.Enable", true);
         _auctionBatchSeconds = sConfigMgr->GetOption<uint32>("EnhancedSupport.AuctionFilter.BatchSeconds", 0);
@@ -2057,7 +2123,7 @@ public:
 
         // Asking price is the buyout when set, otherwise the starting bid.
         uint32 const price = entry->buyout ? entry->buyout : entry->startbid;
-        if (!IsSuspiciousAuction(proto, price))
+        if (!IsSuspiciousAuction(proto, entry->itemCount, price))
             return;
 
         Report("listing", proto, entry->item_template, entry->itemCount, price, entry->owner, ObjectGuid::Empty);
@@ -2071,7 +2137,7 @@ public:
         ItemTemplate const* proto = sObjectMgr->GetItemTemplate(entry->item_template);
 
         // On a completed sale (buyout or won bid) entry->bid holds the price paid.
-        if (!IsSuspiciousAuction(proto, entry->bid))
+        if (!IsSuspiciousAuction(proto, entry->itemCount, entry->bid))
             return;
 
         Report("sale", proto, entry->item_template, entry->itemCount, entry->bid, entry->owner, entry->bidder);
@@ -2107,6 +2173,7 @@ private:
         std::string const itemName = proto ? proto->Name1 : "Unknown";
         uint32 const quality = proto ? proto->Quality : 0;
         uint32 const vendorValue = proto ? proto->SellPrice * count : 0;
+        uint32 const vendorPrice = _auctionFilterVendorMultiplier ? VendorPriceFor(proto, count) : 0;
 
         PartyInfo const sellerInfo = ResolveParty(seller);
 
@@ -2119,9 +2186,10 @@ private:
         }
 
         LOG_INFO("module.enhancedsupport",
-            "AuctionFilter: suspicious {} - {}x [{}] (id {}, {}) for {} (vendor value {}) | Seller: {} ({}, account {}, IP {}) | Buyer: {}",
+            "AuctionFilter: suspicious {} - {}x [{}] (id {}, {}) for {} (vendor value {}, NPC vendor price {}) | Seller: {} ({}, account {}, IP {}) | Buyer: {}",
             event, count, itemName, itemId, QualityName(quality),
             EnhancedSupport::FormatMoney(price), EnhancedSupport::FormatMoney(vendorValue),
+            vendorPrice ? EnhancedSupport::FormatMoney(vendorPrice) : "n/a",
             sellerInfo.name, seller.GetCounter(), sellerInfo.account, sellerInfo.ip,
             buyerLine.empty() ? "n/a" : buyerLine);
 
@@ -2130,7 +2198,7 @@ private:
             sellerInfo.name, seller.GetCounter(), sellerInfo.account, sellerInfo.ip);
 
         QueueOrBatchAuction(seller, event, std::move(header),
-            AuctionBatchItem{ itemName, itemId, count, quality, price, vendorValue, std::move(buyerLine) });
+            AuctionBatchItem{ itemName, itemId, count, quality, price, vendorValue, vendorPrice, std::move(buyerLine) });
 #endif
     }
 };

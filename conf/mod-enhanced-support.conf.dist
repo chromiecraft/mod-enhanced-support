@@ -419,12 +419,43 @@ EnhancedSupport.AuctionFilter.AlwaysLogGrey = 0
 EnhancedSupport.AuctionFilter.GreyMinPrice = "0"
 
 #
+#    EnhancedSupport.AuctionFilter.VendorMultiplier
+#        Description: Flag auctions of items that an NPC vendor sells for gold with unlimited
+#                     stock (food, drink, reagents, thread, ...) when the price is at least this
+#                     many times what the vendor charges for the same amount. Nobody pays 500g
+#                     for a stack anyone can buy from a vendor for a few silver, so such a sale
+#                     is likely a disguised transfer. Applies to any item quality and works even
+#                     when AuctionFilter.MaxQuality is disabled (-1). Items bought with tokens,
+#                     honor or arena points, and limited-stock vendor items (e.g. rare recipes),
+#                     are not covered. Respects the AuctionFilter.OnListing setting. Log-only;
+#                     gated by EnhancedSupport.Enable.
+#        Default:     0 - Off
+#                     e.g. 100 - Flag vendor items sold for 100x their vendor price or more
+#
+
+EnhancedSupport.AuctionFilter.VendorMultiplier = 0
+
+#
+#    EnhancedSupport.AuctionFilter.VendorMinPrice
+#        Description: Minimum price for the vendor rule above to flag an auction, so cheap
+#                     items listed with a harmless markup (e.g. 5c jerky sold for 10s) do not
+#                     raise alerts. Accepts a gold/silver/copper string like the .send money
+#                     command, e.g. "100g", "50g 30s"; a bare number is copper. Has no effect
+#                     unless AuctionFilter.VendorMultiplier is set.
+#        Default:     "0" - No minimum (the multiplier alone decides)
+#                     e.g. "50g" - Only flag vendor-item auctions priced at 50g or more
+#
+
+EnhancedSupport.AuctionFilter.VendorMinPrice = "0"
+
+#
 #    EnhancedSupport.AuctionFilter.OnListing
 #        Description: By default only completed sales are flagged (that is where value actually
 #                     changes hands, and both seller and buyer are known). Enable this to also
 #                     flag the suspicious listing when it is first posted, as an early warning -
 #                     at listing time the buyer is not yet known. Has no effect unless the
-#                     auction filter is active (any of MaxQuality / AlwaysLogGrey / GreyMinPrice).
+#                     auction filter is active (any of MaxQuality / AlwaysLogGrey / GreyMinPrice /
+#                     VendorMultiplier).
 #        Default:     0 - Flag completed sales only
 #                     1 - Also flag suspicious listings when posted
 #

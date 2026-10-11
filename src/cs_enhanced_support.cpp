@@ -201,7 +201,8 @@ public:
         int32 const auctionMaxQuality = EnhancedSupport::GetAuctionFilterMaxQuality();
         bool const auctionAlwaysGrey = EnhancedSupport::GetAuctionFilterAlwaysLogGrey();
         uint32 const auctionGreyMinPrice = EnhancedSupport::GetAuctionFilterGreyMinPrice();
-        if (auctionMaxQuality < 0 && !auctionAlwaysGrey && auctionGreyMinPrice == 0)
+        uint32 const auctionVendorMultiplier = EnhancedSupport::GetAuctionFilterVendorMultiplier();
+        if (auctionMaxQuality < 0 && !auctionAlwaysGrey && auctionGreyMinPrice == 0 && auctionVendorMultiplier == 0)
             handler->SendSysMessage("  Auction filter: disabled");
         else
         {
@@ -214,8 +215,12 @@ public:
                 : (auctionGreyMinPrice == 0
                     ? "follows quality rule"
                     : Acore::StringFormat("price >= {}", EnhancedSupport::FormatMoney(auctionGreyMinPrice)));
-            handler->PSendSysMessage("  Auction filter: quality {}, grey: {}, scope: {}",
-                quality, grey,
+            std::string const vendor = auctionVendorMultiplier == 0
+                ? "off"
+                : Acore::StringFormat(">= {}x vendor price (price >= {})", auctionVendorMultiplier,
+                    EnhancedSupport::FormatMoney(EnhancedSupport::GetAuctionFilterVendorMinPrice()));
+            handler->PSendSysMessage("  Auction filter: quality {}, grey: {}, vendor items: {}, scope: {}",
+                quality, grey, vendor,
                 EnhancedSupport::GetAuctionFilterOnListing() ? "sales + listings" : "sales only");
 
             uint32 const auctionBatch = EnhancedSupport::GetAuctionBatchSeconds();
