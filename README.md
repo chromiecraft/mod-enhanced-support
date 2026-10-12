@@ -240,6 +240,30 @@ against a current baseline. The module keeps its own table because the
 authserver overwrites `account.last_ip`/`last_login` before the worldserver sees
 the login.
 
+### Shared-IP alert
+
+Reports when one IP brings many distinct accounts into the world within a short
+window, dormant or not - the shape of a credential scan working through a list.
+`EnhancedSupport.SharedIp.Accounts` sets how many accounts trigger it (`0`, the
+default, disables it) and `EnhancedSupport.SharedIp.WindowMinutes` (default `60`)
+the sliding window. The report goes to the server log with the full account list
+and, when mod-chat-transmitter is available, to Discord (the chat filter's
+channel) with up to 25 accounts and the IP's country as configured by
+`EnhancedSupport.DormantLogin.ShowCountry`. Each IP is reported at most once per
+window. Detection only: nothing is blocked.
+
+It shares the dormant-login hook, so only world logins count towards the
+threshold: a client that authenticates but never enters the realm is not seen.
+Multiboxers, households and shared connections (CGNAT, VPNs) trip it at low
+thresholds. Tracking is in-memory and cleared on restart.
+
+`EnhancedSupport.SharedIp.CountFailedLogins` (default `0`) adds the IP's failed
+logins within the window to the report ("+ M failed logins on K accounts"). They
+do not count towards the threshold: the auth DB table `logs_ip_actions` is
+queried only once an IP crosses it, asynchronously. The authserver records wrong
+passwords there only with `WrongPass.Logging = 1` in `authserver.conf`, and never
+records attempts on account names that do not exist.
+
 ### Arena telemetry (cheat detection)
 
 Records raw combat events from live arena matches into the characters DB table
@@ -433,6 +457,9 @@ Examples: `.support keyword add wowgold`, `.support list keywords`,
 | `EnhancedSupport.DormantLogin.BanSkipLocation` | `0` | Waive the `BanMinutes` lock and ban when the new IP is in the same country (`1`) or the same country and region (`2`) as the last-known one; `0` never waives. The report still goes out. Level `2` needs a DB3 database |
 | `EnhancedSupport.DormantLogin.DiscordSkipLocation` | `0` | Keep the Discord report off when the new IP is in the same country (`1`) or the same country and region (`2`) as the last-known one; `0` always sends. The server log keeps every report, and a locked account is always sent. Level `2` needs a DB3 database |
 | `EnhancedSupport.DormantLogin.ShowCountry` | `1` | Name the country (and city, with a DB3 database) of both IPs in the Discord report, flag included; the server log keeps bare IPs. `0` skips the IP2Location lookup. Needs the core's `IPLocationFile` set in `worldserver.conf` |
+| `EnhancedSupport.SharedIp.Accounts` | `0` | Report an IP once this many distinct accounts logged into the world from it within `SharedIp.WindowMinutes`, dormant or not; `0` disables, `1` is treated as `2` |
+| `EnhancedSupport.SharedIp.WindowMinutes` | `60` | Sliding window for `SharedIp.Accounts`, and the minimum time between two reports for the same IP (minimum `1`) |
+| `EnhancedSupport.SharedIp.CountFailedLogins` | `0` | Add the IP's failed logins within the window to the report, looked up in `logs_ip_actions` once the threshold is crossed. Needs `WrongPass.Logging = 1` in `authserver.conf` |
 | `EnhancedSupport.ArenaTelemetry.Enable` | `0`   | Record arena combat telemetry (casts, cancels, failed casts, aura applies/removes, position samples) to `enhanced_support_arena_events` for offline cheat detection |
 | `EnhancedSupport.ArenaTelemetry.RatedOnly` | `1` | Record rated matches only; `0` also records skirmishes |
 | `EnhancedSupport.ArenaTelemetry.PositionSampleMs` | `500` | Interval between position/orientation samples (min 100); `0` disables sampling, cast/aura events remain |
@@ -452,7 +479,7 @@ Examples: `.support keyword add wowgold`, `.support list keywords`,
 - `src/mod_enhanced_support.cpp` — world/player scripts (config cache, mail filter).
 - `src/cs_enhanced_support.cpp` — the `.support` chat commands.
 - `src/arena_telemetry.cpp` — the arena telemetry recorder (cheat detection).
-- `src/dormant_login.cpp` — the dormant-login detector.
+- `src/dormant_login.cpp` — the dormant-login detector and the shared-IP alert.
 - `src/EnhancedSupport.h` — shared config/keyword API used by the `.cpp` files.
 - `conf/mod-enhanced-support.conf.dist` — distributed config template.
 - `data/sql/db-auth`, `data/sql/db-world`, `data/sql/db-characters` —

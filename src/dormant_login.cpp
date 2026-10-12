@@ -17,6 +17,7 @@
 
 #include "EnhancedSupport.h"
 #include "AccountMgr.h"
+#include "AsyncCallbackProcessor.h"
 #include "BanMgr.h"
 #include "Chat.h"
 #include "Common.h"
@@ -26,13 +27,16 @@
 #include "IPLocation.h"
 #include "Log.h"
 #include "Player.h"
+#include "QueryCallback.h"
 #include "ScriptMgr.h"
 #include "StringFormat.h"
 #include "WorldSession.h"
 #include "WorldSessionMgr.h"
 
+#include <algorithm>
 #include <atomic>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -65,6 +69,12 @@
 // table when the SQL update is applied). The row is updated on every world
 // login even while the alert is disabled, so the baseline is fresh if
 // DormantLogin.Days is raised above 0 later.
+//
+// The same hook feeds the shared-IP alert: one IP bringing many distinct
+// accounts into the world in a short window, dormant or not, is reported once
+// per window. Only world logins count towards the threshold; a client that
+// stops at the authserver never reaches this hook. Its failed logins can still
+// be added to the report from logs_ip_actions, which the authserver writes to.
 
 namespace
 {
@@ -95,6 +105,91 @@ namespace
     std::atomic<uint32> _dormantBanSkipLocation{0};
     std::atomic<uint32> _dormantDiscordSkipLocation{0};
     std::atomic<uint32> _dormantWarnSeconds{5};
+    std::atomic<uint32> _sharedIpAccounts{0};
+    std::atomic<uint32> _sharedIpWindowMinutes{60};
+    std::atomic<bool> _sharedIpCountFailedLogins{false};
+
+    // Recent world logins per IP, for the shared-IP alert. Written from the
+    // network threads, so every access holds the mutex.
+    struct SharedIpLogin
+    {
+        uint32 accountId;
+        std::string username;
+        uint64 time;
+    };
+
+    struct SharedIpEntry
+    {
+        std::vector<SharedIpLogin> logins;
+        uint64 lastReport = 0;
+    };
+
+    // An IP that crossed the threshold, with "name (id)" for each account seen
+    // from it within the window.
+    struct PendingSharedIpReport
+    {
+        std::string ip;
+        std::vector<std::string> accounts;
+    };
+
+    std::mutex _sharedIpMutex;
+    std::unordered_map<std::string, SharedIpEntry> _sharedIpLogins;
+    uint64 _sharedIpLastSweep = 0;
+    // Queued by the login hook, sent from the world thread; the count lets the
+    // per-tick check skip the mutex while nothing is queued.
+    std::vector<PendingSharedIpReport> _pendingSharedIpReports;
+    std::atomic<uint32> _pendingSharedIpReportCount{0};
+
+    // Records a world login and queues a report when the IP reaches the account
+    // threshold. An IP is reported at most once per window, so a long run of
+    // logins produces one alert per window rather than one per account.
+    void TrackSharedIpLogin(std::string const& ip, uint32 accountId, std::string const& username, uint64 now)
+    {
+        uint32 const threshold = EnhancedSupport::GetSharedIpAccounts();
+        if (threshold == 0)
+            return;
+
+        uint64 const window = uint64(EnhancedSupport::GetSharedIpWindowMinutes()) * MINUTE;
+        auto const expired = [&](SharedIpLogin const& login) { return login.time + window <= now; };
+
+        std::lock_guard<std::mutex> guard(_sharedIpMutex);
+
+        // Keeps the map down to the IPs seen (or reported) within the window.
+        if (now >= _sharedIpLastSweep + window)
+        {
+            _sharedIpLastSweep = now;
+            for (auto it = _sharedIpLogins.begin(); it != _sharedIpLogins.end();)
+            {
+                std::erase_if(it->second.logins, expired);
+                if (it->second.logins.empty() && it->second.lastReport + window <= now)
+                    it = _sharedIpLogins.erase(it);
+                else
+                    ++it;
+            }
+        }
+
+        SharedIpEntry& entry = _sharedIpLogins[ip];
+        std::erase_if(entry.logins, expired);
+
+        auto const known = std::find_if(entry.logins.begin(), entry.logins.end(),
+            [accountId](SharedIpLogin const& login) { return login.accountId == accountId; });
+        if (known != entry.logins.end())
+            known->time = now;
+        else
+            entry.logins.push_back({ accountId, username, now });
+
+        if (entry.logins.size() < threshold || (entry.lastReport > 0 && now < entry.lastReport + window))
+            return;
+
+        entry.lastReport = now;
+        PendingSharedIpReport report{ ip, {} };
+        report.accounts.reserve(entry.logins.size());
+        for (SharedIpLogin const& login : entry.logins)
+            report.accounts.push_back(Acore::StringFormat("{} ({})", login.username, login.accountId));
+
+        _pendingSharedIpReports.push_back(std::move(report));
+        _pendingSharedIpReportCount.store(static_cast<uint32>(_pendingSharedIpReports.size()), std::memory_order_relaxed);
+    }
 
     // Accounts locked pending their ban: account id -> epoch seconds when the
     // ban fires. Inserted from the auth network thread, consumed on the world
@@ -289,6 +384,55 @@ namespace
         return Acore::StringFormat("{} {} {}", ip, flag, place);
     }
 #endif
+
+    std::string JoinAccounts(std::vector<std::string> const& accounts, size_t limit)
+    {
+        std::string list;
+        for (size_t i = 0; i < accounts.size() && i < limit; ++i)
+        {
+            if (i > 0)
+                list += ", ";
+            list += accounts[i];
+        }
+        if (accounts.size() > limit)
+            list += Acore::StringFormat(" and {} more", accounts.size() - limit);
+        return list;
+    }
+
+    struct FailedLogins
+    {
+        uint64 attempts = 0;
+        uint64 accounts = 0;
+    };
+
+    // failed is empty when the failed-login lookup is disabled.
+    void ReportSharedIp(PendingSharedIpReport const& report, std::optional<FailedLogins> failed)
+    {
+        std::vector<std::string> const& accounts = report.accounts;
+        uint32 const windowMinutes = EnhancedSupport::GetSharedIpWindowMinutes();
+        LOG_INFO("module.enhancedsupport",
+            "SharedIp: {} accounts logged in from {} within {} minute(s){}: {}",
+            accounts.size(), report.ip, windowMinutes,
+            failed ? Acore::StringFormat(" (+ {} failed login(s) on {} account(s))", failed->attempts, failed->accounts) : "",
+            JoinAccounts(accounts, accounts.size()));
+
+#ifdef HAS_CHAT_TRANSMITTER
+        // Keeps a long list within Discord's message size limit; the server log
+        // has all of it.
+        std::string const accountList = JoinAccounts(accounts, 25);
+
+        std::string const note = Acore::StringFormat(
+            "👥 **Many accounts from one IP** — {} accounts within {} minute(s)\n"
+            "🌐 IP: {}\n"
+            "👤 Accounts: {}\n"
+            "{}"
+            "🔎 Detection only, nothing was blocked. Check for a credential scan or shared connection.",
+            accounts.size(), windowMinutes, DescribeIp(report.ip), accountList,
+            failed ? Acore::StringFormat("❌ Failed logins in the same window: {} on {} account(s)\n",
+                failed->attempts, failed->accounts) : "");
+        sChatTransmitter->QueueNotification("ChatFilter", note);
+#endif
+    }
 }
 
 namespace EnhancedSupport
@@ -304,6 +448,13 @@ namespace EnhancedSupport
         _dormantDiscordSkipLocation.store(std::min<uint32>(
             sConfigMgr->GetOption<uint32>("EnhancedSupport.DormantLogin.DiscordSkipLocation", 0), BAN_SKIP_LOCATION_REGION));
         _dormantWarnSeconds.store(sConfigMgr->GetOption<uint32>("EnhancedSupport.DormantLogin.WarnSeconds", 5));
+
+        // 1 would report every login, so the smallest meaningful threshold is 2.
+        uint32 const sharedIpAccounts = sConfigMgr->GetOption<uint32>("EnhancedSupport.SharedIp.Accounts", 0);
+        _sharedIpAccounts.store(sharedIpAccounts == 1 ? 2 : sharedIpAccounts);
+        _sharedIpWindowMinutes.store(std::max<uint32>(
+            sConfigMgr->GetOption<uint32>("EnhancedSupport.SharedIp.WindowMinutes", 60), 1));
+        _sharedIpCountFailedLogins.store(sConfigMgr->GetOption<bool>("EnhancedSupport.SharedIp.CountFailedLogins", false));
     }
 
     uint32 GetDormantLoginDays()
@@ -339,6 +490,21 @@ namespace EnhancedSupport
     uint32 GetDormantLoginWarnSeconds()
     {
         return _dormantWarnSeconds.load(std::memory_order_relaxed);
+    }
+
+    uint32 GetSharedIpAccounts()
+    {
+        return _sharedIpAccounts.load(std::memory_order_relaxed);
+    }
+
+    uint32 GetSharedIpWindowMinutes()
+    {
+        return _sharedIpWindowMinutes.load(std::memory_order_relaxed);
+    }
+
+    bool GetSharedIpCountFailedLogins()
+    {
+        return _sharedIpCountFailedLogins.load(std::memory_order_relaxed);
     }
 }
 
@@ -442,6 +608,8 @@ public:
 #endif
                 }
             }
+
+            TrackSharedIpLogin(ip, accountId, username, now);
         }
 
         std::string escapedIp = ip;
@@ -619,10 +787,72 @@ private:
     uint32 _warnTimerMs = 0;
 };
 
+// Sends the shared-IP reports queued by the login hook. The failed-login
+// lookup runs only for an IP that crossed the threshold, and asynchronously:
+// logs_ip_actions has no index on ip and can grow large.
+class EnhancedSupportSharedIpReporter : public WorldScript
+{
+public:
+    EnhancedSupportSharedIpReporter() : WorldScript("EnhancedSupportSharedIpReporter", {
+        WORLDHOOK_ON_UPDATE
+    }) { }
+
+    void OnUpdate(uint32 /*diff*/) override
+    {
+        _queryProcessor.ProcessReadyCallbacks();
+
+        if (_pendingSharedIpReportCount.load(std::memory_order_relaxed) == 0)
+            return;
+
+        std::vector<PendingSharedIpReport> reports;
+        {
+            std::lock_guard<std::mutex> guard(_sharedIpMutex);
+            reports.swap(_pendingSharedIpReports);
+            _pendingSharedIpReportCount.store(0, std::memory_order_relaxed);
+        }
+
+        for (PendingSharedIpReport& report : reports)
+        {
+            if (!EnhancedSupport::GetSharedIpCountFailedLogins())
+            {
+                ReportSharedIp(report, std::nullopt);
+                continue;
+            }
+
+            // Type 1 is a failed login: a wrong password from the authserver
+            // (WrongPass.Logging) or a refused world login from the IP action
+            // logger. The DB clock is used on both sides of the comparison.
+            std::string escapedIp = report.ip;
+            LoginDatabase.EscapeString(escapedIp);
+            std::string const sql = Acore::StringFormat(
+                "SELECT COUNT(*), COUNT(DISTINCT account_id) FROM logs_ip_actions "
+                "WHERE type = 1 AND ip = '{}' AND unixtime >= UNIX_TIMESTAMP() - {}",
+                escapedIp, uint64(EnhancedSupport::GetSharedIpWindowMinutes()) * MINUTE);
+
+            _queryProcessor.AddCallback(LoginDatabase.AsyncQuery(sql)
+                .WithCallback([report = std::move(report)](QueryResult result)
+            {
+                FailedLogins failed;
+                if (result)
+                {
+                    Field* fields = result->Fetch();
+                    failed.attempts = fields[0].Get<uint64>();
+                    failed.accounts = fields[1].Get<uint64>();
+                }
+                ReportSharedIp(report, failed);
+            }));
+        }
+    }
+
+private:
+    QueryCallbackProcessor _queryProcessor;
+};
+
 void AddEnhancedSupportDormantLoginScripts()
 {
     new EnhancedSupportDormantLogin();
     new EnhancedSupportDormantLock();
     new EnhancedSupportDormantAuctionLock();
     new EnhancedSupportDormantBanWorker();
+    new EnhancedSupportSharedIpReporter();
 }

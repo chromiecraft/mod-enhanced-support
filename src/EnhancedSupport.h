@@ -170,6 +170,18 @@ namespace EnhancedSupport
     // stay online, in seconds; 0 warns only at login and on blocked actions.
     uint32 GetDormantLoginWarnSeconds();
 
+    // Shared-IP alert: report (server log + Discord) when this many distinct
+    // accounts reach the world from one IP within WindowMinutes, dormant or not.
+    // 0 disables. Detection only. Lives in dormant_login.cpp, which owns the
+    // world-login hook.
+    uint32 GetSharedIpAccounts();
+    uint32 GetSharedIpWindowMinutes();
+
+    // Whether a shared-IP report also counts the failed logins from that IP in
+    // the window (auth DB logs_ip_actions, looked up only once the threshold is
+    // crossed). Needs WrongPass.Logging in authserver.conf.
+    bool GetSharedIpCountFailedLogins();
+
     // Arena telemetry (cheat detection): raw cast/aura/position events from live
     // arena matches, written to the characters DB table enhanced_support_arena_events
     // for offline reaction-time and facing analysis. State lives in

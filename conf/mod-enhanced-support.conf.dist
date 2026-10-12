@@ -619,6 +619,53 @@ EnhancedSupport.DormantLogin.DiscordSkipLocation = 0
 EnhancedSupport.DormantLogin.WarnSeconds = 5
 
 #
+#    EnhancedSupport.SharedIp.Accounts
+#        Description: Report when this many distinct accounts log into the world from the
+#                     same IP within SharedIp.WindowMinutes, whether dormant or not - one
+#                     address cycling through many accounts is the shape of a credential
+#                     scan. Reports go to the server log (full account list) and to Discord
+#                     (via mod-chat-transmitter's ChatFilter alias, when available, listing
+#                     up to 25 accounts). An IP is reported at most once per window, so a long
+#                     run produces one report per window. Detection only: nothing is blocked.
+#                     Only world logins count; a client that authenticates but never enters
+#                     the realm is not seen. Multiboxers, households and shared connections
+#                     (CGNAT, VPNs) also trip it at low values. The Discord report names the
+#                     IP's country as configured by DormantLogin.ShowCountry. Tracking is
+#                     in-memory and cleared on restart. Also gated by EnhancedSupport.Enable.
+#        Default:     0 - Disabled
+#                     e.g. 5 - Report an IP once 5 accounts logged in from it within the window
+#                     (1 is treated as 2)
+#
+
+EnhancedSupport.SharedIp.Accounts = 0
+
+#
+#    EnhancedSupport.SharedIp.WindowMinutes
+#        Description: The sliding window, in minutes, over which SharedIp.Accounts counts the
+#                     distinct accounts per IP. Also the minimum time between two reports for
+#                     the same IP. Has no effect while SharedIp.Accounts is 0.
+#        Default:     60 (minimum 1)
+#
+
+EnhancedSupport.SharedIp.WindowMinutes = 60
+
+#
+#    EnhancedSupport.SharedIp.CountFailedLogins
+#        Description: Add the failed logins from the reported IP within SharedIp.WindowMinutes
+#                     to each shared-IP report: how many attempts, on how many accounts. They
+#                     do not count towards SharedIp.Accounts; the lookup in the auth DB table
+#                     logs_ip_actions runs only once an IP has crossed that threshold.
+#                     Wrong passwords are only recorded there when WrongPass.Logging = 1 in
+#                     authserver.conf; without it the report shows zero. Attempts on account
+#                     names that do not exist are never recorded by the authserver. Has no
+#                     effect while SharedIp.Accounts is 0.
+#        Default:     0 - Disabled (no lookup)
+#                     1 - Enabled
+#
+
+EnhancedSupport.SharedIp.CountFailedLogins = 0
+
+#
 #    EnhancedSupport.ArenaTelemetry.Enable
 #        Description: Record raw combat telemetry from live arena matches into the characters
 #                     DB table `enhanced_support_arena_events`, for offline cheat detection
