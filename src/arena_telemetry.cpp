@@ -1287,7 +1287,7 @@ public:
         if (spell->IsTriggered() || (spell->GetCastTime() <= 0 && !spellInfo->IsChanneled()))
             return;
 
-        Player* player = caster->ToPlayer();
+        Player* player = caster ? caster->ToPlayer() : nullptr;
         if (!player)
             return;
 
@@ -1302,7 +1302,7 @@ public:
         if (spell->IsTriggered())
             return;
 
-        Player* player = caster->ToPlayer();
+        Player* player = caster ? caster->ToPlayer() : nullptr;
         if (!player)
             return;
 
@@ -1316,7 +1316,7 @@ public:
         if (spell->IsTriggered())
             return;
 
-        Player* player = caster->ToPlayer();
+        Player* player = caster ? caster->ToPlayer() : nullptr;
         if (!player)
             return;
 
