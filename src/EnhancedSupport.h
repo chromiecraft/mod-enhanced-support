@@ -182,6 +182,10 @@ namespace EnhancedSupport
     // crossed). Needs WrongPass.Logging in authserver.conf.
     bool GetSharedIpCountFailedLogins();
 
+    // Minutes without a new account after which the shared-IP alert is
+    // followed by an updated total of the accounts that joined since.
+    uint32 GetSharedIpQuietMinutes();
+
     // Arena telemetry (cheat detection): raw cast/aura/position events from live
     // arena matches, written to the characters DB table enhanced_support_arena_events
     // for offline reaction-time and facing analysis. State lives in

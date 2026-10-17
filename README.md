@@ -249,8 +249,13 @@ default, disables it) and `EnhancedSupport.SharedIp.WindowMinutes` (default `60`
 the sliding window. The report goes to the server log with the full account list
 and, when mod-chat-transmitter is available, to Discord (the chat filter's
 channel) with up to 25 accounts and the IP's country as configured by
-`EnhancedSupport.DormantLogin.ShowCountry`. Each IP is reported at most once per
-window. Detection only: nothing is blocked.
+`EnhancedSupport.DormantLogin.ShowCountry`. Detection only: nothing is blocked.
+
+The alert goes out as soon as the IP reaches the threshold and opens an incident
+lasting one window. Accounts that join after it are sent as an updated total once
+the IP has gone `EnhancedSupport.SharedIp.QuietMinutes` (default `5`) without a
+new account, or when the window ends. A scan that pauses and resumes gets another
+total each time it goes quiet; nothing is sent when no account joined.
 
 It shares the dormant-login hook, so only world logins count towards the
 threshold: a client that authenticates but never enters the realm is not seen.
@@ -258,9 +263,11 @@ Multiboxers, households and shared connections (CGNAT, VPNs) trip it at low
 thresholds. Tracking is in-memory and cleared on restart.
 
 `EnhancedSupport.SharedIp.CountFailedLogins` (default `0`) adds the IP's failed
-logins within the window to the report ("+ M failed logins on K accounts"). They
-do not count towards the threshold: the auth DB table `logs_ip_actions` is
-queried only once an IP crosses it, asynchronously. The authserver records wrong
+logins to each report ("M failed logins on K accounts"), counted from one window
+before the alert, since a scan's failures usually come before its first
+successful login. The line is left out when there are none. They do not count
+towards the threshold: the auth DB table `logs_ip_actions` is queried only when a
+report is sent, asynchronously. The authserver records wrong
 passwords there only with `WrongPass.Logging = 1` in `authserver.conf`, and never
 records attempts on account names that do not exist.
 
@@ -458,8 +465,9 @@ Examples: `.support keyword add wowgold`, `.support list keywords`,
 | `EnhancedSupport.DormantLogin.DiscordSkipLocation` | `0` | Keep the Discord report off when the new IP is in the same country (`1`) or the same country and region (`2`) as the last-known one; `0` always sends. The server log keeps every report, and a locked account is always sent. Level `2` needs a DB3 database |
 | `EnhancedSupport.DormantLogin.ShowCountry` | `1` | Name the country (and city, with a DB3 database) of both IPs in the Discord report, flag included; the server log keeps bare IPs. `0` skips the IP2Location lookup. Needs the core's `IPLocationFile` set in `worldserver.conf` |
 | `EnhancedSupport.SharedIp.Accounts` | `0` | Report an IP once this many distinct accounts logged into the world from it within `SharedIp.WindowMinutes`, dormant or not; `0` disables, `1` is treated as `2` |
-| `EnhancedSupport.SharedIp.WindowMinutes` | `60` | Sliding window for `SharedIp.Accounts`, and the minimum time between two reports for the same IP (minimum `1`) |
-| `EnhancedSupport.SharedIp.CountFailedLogins` | `0` | Add the IP's failed logins within the window to the report, looked up in `logs_ip_actions` once the threshold is crossed. Needs `WrongPass.Logging = 1` in `authserver.conf` |
+| `EnhancedSupport.SharedIp.WindowMinutes` | `60` | Sliding window for `SharedIp.Accounts`, and how long an incident stays open after the alert (minimum `1`) |
+| `EnhancedSupport.SharedIp.QuietMinutes` | `5` | Send the accounts that joined after the alert as an updated total once the IP has gone this many minutes without a new one, or when the window ends (minimum `1`) |
+| `EnhancedSupport.SharedIp.CountFailedLogins` | `0` | Add the IP's failed logins to each report, looked up in `logs_ip_actions` only when a report is sent and shown only when there are any. Needs `WrongPass.Logging = 1` in `authserver.conf` |
 | `EnhancedSupport.ArenaTelemetry.Enable` | `0`   | Record arena combat telemetry (casts, cancels, failed casts, aura applies/removes, position samples) to `enhanced_support_arena_events` for offline cheat detection |
 | `EnhancedSupport.ArenaTelemetry.RatedOnly` | `1` | Record rated matches only; `0` also records skirmishes |
 | `EnhancedSupport.ArenaTelemetry.PositionSampleMs` | `500` | Interval between position/orientation samples (min 100); `0` disables sampling, cast/aura events remain |

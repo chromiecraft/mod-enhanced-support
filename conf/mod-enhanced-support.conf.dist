@@ -625,8 +625,11 @@ EnhancedSupport.DormantLogin.WarnSeconds = 5
 #                     address cycling through many accounts is the shape of a credential
 #                     scan. Reports go to the server log (full account list) and to Discord
 #                     (via mod-chat-transmitter's ChatFilter alias, when available, listing
-#                     up to 25 accounts). An IP is reported at most once per window, so a long
-#                     run produces one report per window. Detection only: nothing is blocked.
+#                     up to 25 accounts). The alert opens an incident lasting one window:
+#                     accounts that join after it are sent as an updated total once the IP
+#                     has gone quiet (see SharedIp.QuietMinutes) or the window ends, so a
+#                     long run produces an alert and a few totals rather than one message per
+#                     account. Detection only: nothing is blocked.
 #                     Only world logins count; a client that authenticates but never enters
 #                     the realm is not seen. Multiboxers, households and shared connections
 #                     (CGNAT, VPNs) also trip it at low values. The Discord report names the
@@ -642,21 +645,36 @@ EnhancedSupport.SharedIp.Accounts = 0
 #
 #    EnhancedSupport.SharedIp.WindowMinutes
 #        Description: The sliding window, in minutes, over which SharedIp.Accounts counts the
-#                     distinct accounts per IP. Also the minimum time between two reports for
-#                     the same IP. Has no effect while SharedIp.Accounts is 0.
+#                     distinct accounts per IP. Also how long an incident stays open after
+#                     the alert, so the minimum time between two alerts for the same IP.
+#                     Has no effect while SharedIp.Accounts is 0.
 #        Default:     60 (minimum 1)
 #
 
 EnhancedSupport.SharedIp.WindowMinutes = 60
 
 #
+#    EnhancedSupport.SharedIp.QuietMinutes
+#        Description: Minutes without a new account from the IP after which the accounts
+#                     that joined since the last report are sent as an updated total. Nothing
+#                     is sent when no account joined. If the IP picks up again within the
+#                     window, another total follows once it goes quiet again; any accounts
+#                     still unreported when the window ends are sent then. Has no effect
+#                     while SharedIp.Accounts is 0.
+#        Default:     5 (minimum 1)
+#
+
+EnhancedSupport.SharedIp.QuietMinutes = 5
+
+#
 #    EnhancedSupport.SharedIp.CountFailedLogins
-#        Description: Add the failed logins from the reported IP within SharedIp.WindowMinutes
-#                     to each shared-IP report: how many attempts, on how many accounts. They
-#                     do not count towards SharedIp.Accounts; the lookup in the auth DB table
-#                     logs_ip_actions runs only once an IP has crossed that threshold.
+#        Description: Add the reported IP's failed logins to each shared-IP report: how many
+#                     attempts, on how many accounts, counted from one SharedIp.WindowMinutes
+#                     before the alert up to the report. The line is left out when there are
+#                     none. They do not count towards SharedIp.Accounts; the auth DB table
+#                     logs_ip_actions is only queried when a report is sent.
 #                     Wrong passwords are only recorded there when WrongPass.Logging = 1 in
-#                     authserver.conf; without it the report shows zero. Attempts on account
+#                     authserver.conf; without it the line never appears. Attempts on account
 #                     names that do not exist are never recorded by the authserver. Has no
 #                     effect while SharedIp.Accounts is 0.
 #        Default:     0 - Disabled (no lookup)
