@@ -262,6 +262,15 @@ threshold: a client that authenticates but never enters the realm is not seen.
 Multiboxers, households and shared connections (CGNAT, VPNs) trip it at low
 thresholds. Tracking is in-memory and cleared on restart.
 
+Known shared connections can be exempted with the `.support ipwhitelist`
+commands below. An entry is an IPv4 address, an IPv4 range in CIDR form no wider
+than `/16` (for a household whose address changes within its provider's range),
+or an exact IPv6 address, with an optional note. Logins from a whitelisted IP are
+not tracked, and whitelisting an IP drops anything already collected for it, so
+no updated total follows. The list lives in the auth DB table
+`enhanced_support_shared_ip_whitelist`, shared across all realms. It only affects
+the shared-IP alert; the dormant-login check still runs for those IPs.
+
 `EnhancedSupport.SharedIp.CountFailedLogins` (default `0`) adds the IP's failed
 logins to each report ("M failed logins on K accounts"), counted from one window
 before the alert, since a scan's failures usually come before its first
@@ -435,6 +444,9 @@ All commands live under `.support` and work in-game and from the server console.
 | `.support emailpattern add <pattern>`    | Administrator | Adds an email substring pattern (stored lowercased).                                          |
 | `.support emailpattern remove <pattern>` | Administrator | Removes an email pattern.                                                                     |
 | `.support list emailpatterns`            | Game Master   | Lists the configured email patterns.                                                          |
+| `.support ipwhitelist add <ip> [note]`   | Administrator | Exempts an IP from the shared-IP alert. `ip` is an IPv4 address, an IPv4 range such as `1.2.3.0/24` (no wider than `/16`) or an IPv6 address. |
+| `.support ipwhitelist remove <ip>`       | Administrator | Removes an IP or range from the shared-IP whitelist.                                          |
+| `.support list ipwhitelist`              | Game Master   | Lists the whitelisted IPs with their notes and who added them.                                |
 | `.support list bans [count] [author]`    | Game Master   | Lists the most recent account bans (newest first). `count` defaults to 10, max 50; `author` filters by the ban author substring and defaults to `EnhancedSupport.MailFilter.BanAuthor`, so a bare call shows the module's own bans. |
 | `.support arena matches [count]`         | Game Master   | Lists the most recently recorded arena matches (id, size, start, duration, event count). `count` defaults to 10, max 50. |
 | `.support arena team <arenaTeamId> [count]` | Game Master | Lists the recorded matches a given rated arena team took part in, newest first. `count` defaults to 10, max 50. Only rated matches carry a team id. |

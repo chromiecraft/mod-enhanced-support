@@ -35,8 +35,10 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -320,6 +322,89 @@ namespace
         return (ipA & mask) == (ipB & mask);
     }
 
+    // Narrowest range a whitelist entry may cover, so a typo cannot exempt a
+    // whole provider.
+    constexpr uint32 WHITELIST_MIN_MASK_BITS = 16;
+
+    struct SharedIpWhitelistItem
+    {
+        EnhancedSupport::SharedIpWhitelistEntry entry;
+        bool ipv4 = false;
+        uint32 network = 0;
+        uint32 mask = 0;
+    };
+
+    // Cached from enhanced_support_shared_ip_whitelist. Read on the network
+    // threads, changed by commands on the world thread.
+    std::mutex _whitelistMutex;
+    std::vector<SharedIpWhitelistItem> _whitelist;
+
+    std::string FormatIPv4(uint32 value)
+    {
+        return Acore::StringFormat("{}.{}.{}.{}", value >> 24, (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF);
+    }
+
+    // Accepts an IPv4 address, an IPv4 range in CIDR form ("1.2.3.0/24", host
+    // bits are cleared) or an IPv6 address (exact match only), and fills in the
+    // canonical text the entry is stored and compared under.
+    bool ParseWhitelistEntry(std::string_view input, SharedIpWhitelistItem& out)
+    {
+        std::string text(input);
+        text.erase(0, text.find_first_not_of(" \t"));
+        text.erase(text.find_last_not_of(" \t") + 1);
+        std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return std::tolower(c); });
+        if (text.empty())
+            return false;
+
+        uint32 bits = 32;
+        std::string address = text;
+        size_t const slash = text.find('/');
+        if (slash != std::string::npos)
+        {
+            std::string const bitsText = text.substr(slash + 1);
+            if (bitsText.empty() || bitsText.size() > 2 || bitsText.find_first_not_of("0123456789") != std::string::npos)
+                return false;
+            bits = static_cast<uint32>(std::stoul(bitsText));
+            if (bits < WHITELIST_MIN_MASK_BITS || bits > 32)
+                return false;
+            address = text.substr(0, slash);
+        }
+
+        uint32 value = 0;
+        if (ParseIPv4(address, value))
+        {
+            out.ipv4 = true;
+            out.mask = bits >= 32 ? 0xFFFFFFFFu : ~(0xFFFFFFFFu >> bits);
+            out.network = value & out.mask;
+            out.entry.ip = bits >= 32 ? FormatIPv4(out.network) : Acore::StringFormat("{}/{}", FormatIPv4(out.network), bits);
+            return true;
+        }
+
+        if (slash != std::string::npos || text.find(':') == std::string::npos
+            || text.find_first_not_of("0123456789abcdef:.") != std::string::npos)
+            return false;
+
+        out.ipv4 = false;
+        out.entry.ip = text;
+        return true;
+    }
+
+    bool WhitelistItemMatches(SharedIpWhitelistItem const& item, std::string const& ip)
+    {
+        if (!item.ipv4)
+            return item.entry.ip == ip;
+
+        uint32 value = 0;
+        return ParseIPv4(ip, value) && (value & item.mask) == item.network;
+    }
+
+    bool IsSharedIpWhitelisted(std::string const& ip)
+    {
+        std::lock_guard<std::mutex> guard(_whitelistMutex);
+        return std::any_of(_whitelist.begin(), _whitelist.end(),
+            [&ip](SharedIpWhitelistItem const& item) { return WhitelistItemMatches(item, ip); });
+    }
+
     // Splits the country field back into the CSV columns it was built from.
     // IP2Location quotes every field, so once the core's reader has stripped the
     // quotes a separator is a comma with nothing after it, while a comma inside
@@ -589,6 +674,115 @@ namespace EnhancedSupport
     {
         return _sharedIpQuietMinutes.load(std::memory_order_relaxed);
     }
+
+    void LoadSharedIpWhitelist()
+    {
+        std::vector<SharedIpWhitelistItem> items;
+        if (QueryResult result = LoginDatabase.Query("SELECT ip, note, added_by FROM enhanced_support_shared_ip_whitelist"))
+        {
+            do
+            {
+                Field* fields = result->Fetch();
+                std::string const stored = fields[0].Get<std::string>();
+                SharedIpWhitelistItem item;
+                if (!ParseWhitelistEntry(stored, item))
+                {
+                    LOG_ERROR("module.enhancedsupport",
+                        "SharedIp: skipping invalid whitelist entry '{}' in enhanced_support_shared_ip_whitelist", stored);
+                    continue;
+                }
+                item.entry.note = fields[1].Get<std::string>();
+                item.entry.addedBy = fields[2].Get<std::string>();
+                items.push_back(std::move(item));
+            } while (result->NextRow());
+        }
+
+        std::lock_guard<std::mutex> guard(_whitelistMutex);
+        _whitelist = std::move(items);
+    }
+
+    std::vector<SharedIpWhitelistEntry> GetSharedIpWhitelist()
+    {
+        std::lock_guard<std::mutex> guard(_whitelistMutex);
+        std::vector<SharedIpWhitelistEntry> entries;
+        entries.reserve(_whitelist.size());
+        for (SharedIpWhitelistItem const& item : _whitelist)
+            entries.push_back(item.entry);
+        return entries;
+    }
+
+    bool NormalizeSharedIpWhitelistEntry(std::string_view input, std::string& normalized)
+    {
+        SharedIpWhitelistItem item;
+        if (!ParseWhitelistEntry(input, item))
+            return false;
+
+        normalized = item.entry.ip;
+        return true;
+    }
+
+    // The cache is updated in place rather than reloaded: Execute is async, so
+    // a reload could run before the write lands.
+    bool AddSharedIpWhitelistEntry(std::string const& normalized, std::string const& note, std::string const& addedBy)
+    {
+        SharedIpWhitelistItem item;
+        if (!ParseWhitelistEntry(normalized, item))
+            return false;
+        item.entry.note = note;
+        item.entry.addedBy = addedBy;
+
+        {
+            std::lock_guard<std::mutex> guard(_whitelistMutex);
+            if (std::any_of(_whitelist.begin(), _whitelist.end(),
+                [&](SharedIpWhitelistItem const& existing) { return existing.entry.ip == item.entry.ip; }))
+                return false;
+            _whitelist.push_back(item);
+        }
+
+        std::string escapedIp = item.entry.ip;
+        std::string escapedNote = note;
+        std::string escapedBy = addedBy;
+        LoginDatabase.EscapeString(escapedIp);
+        LoginDatabase.EscapeString(escapedNote);
+        LoginDatabase.EscapeString(escapedBy);
+        LoginDatabase.Execute(
+            "INSERT IGNORE INTO enhanced_support_shared_ip_whitelist (ip, note, added_by) VALUES ('{}', '{}', '{}')",
+            escapedIp, escapedNote, escapedBy);
+
+        // Drops what the IP has accumulated, including an open incident, so no
+        // updated total follows for an IP that was just whitelisted.
+        std::lock_guard<std::mutex> guard(_sharedIpMutex);
+        for (auto it = _sharedIpLogins.begin(); it != _sharedIpLogins.end();)
+        {
+            if (!WhitelistItemMatches(item, it->first))
+            {
+                ++it;
+                continue;
+            }
+
+            if (it->second.incidentStart > 0)
+                _sharedIpOpenIncidents.fetch_sub(1, std::memory_order_relaxed);
+            it = _sharedIpLogins.erase(it);
+        }
+        return true;
+    }
+
+    bool RemoveSharedIpWhitelistEntry(std::string const& normalized)
+    {
+        {
+            std::lock_guard<std::mutex> guard(_whitelistMutex);
+            auto const it = std::find_if(_whitelist.begin(), _whitelist.end(),
+                [&](SharedIpWhitelistItem const& item) { return item.entry.ip == normalized; });
+            if (it == _whitelist.end())
+                return false;
+            _whitelist.erase(it);
+        }
+
+        std::string escapedIp = normalized;
+        LoginDatabase.EscapeString(escapedIp);
+        LoginDatabase.Execute("DELETE FROM enhanced_support_shared_ip_whitelist WHERE ip = '{}'", escapedIp);
+        return true;
+    }
 }
 
 class EnhancedSupportDormantLogin : public AccountScript
@@ -692,7 +886,8 @@ public:
                 }
             }
 
-            TrackSharedIpLogin(ip, accountId, username, now);
+            if (EnhancedSupport::GetSharedIpAccounts() > 0 && !IsSharedIpWhitelisted(ip))
+                TrackSharedIpLogin(ip, accountId, username, now);
         }
 
         std::string escapedIp = ip;
@@ -878,8 +1073,14 @@ class EnhancedSupportSharedIpReporter : public WorldScript
 {
 public:
     EnhancedSupportSharedIpReporter() : WorldScript("EnhancedSupportSharedIpReporter", {
+        WORLDHOOK_ON_STARTUP,
         WORLDHOOK_ON_UPDATE
     }) { }
+
+    void OnStartup() override
+    {
+        EnhancedSupport::LoadSharedIpWhitelist();
+    }
 
     void OnUpdate(uint32 diff) override
     {

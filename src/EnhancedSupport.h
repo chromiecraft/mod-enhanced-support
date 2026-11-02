@@ -186,6 +186,25 @@ namespace EnhancedSupport
     // followed by an updated total of the accounts that joined since.
     uint32 GetSharedIpQuietMinutes();
 
+    // IPs exempt from the shared-IP alert (known households and the like), kept
+    // in the auth DB table enhanced_support_shared_ip_whitelist. An entry is an
+    // IPv4 address, an IPv4 CIDR range no wider than /16, or an exact IPv6
+    // address. Normalize turns user input into the stored form and fails on
+    // anything else; Add and Remove return false when the entry already exists
+    // or is missing.
+    struct SharedIpWhitelistEntry
+    {
+        std::string ip;
+        std::string note;
+        std::string addedBy;
+    };
+
+    void LoadSharedIpWhitelist();
+    std::vector<SharedIpWhitelistEntry> GetSharedIpWhitelist();
+    bool NormalizeSharedIpWhitelistEntry(std::string_view input, std::string& normalized);
+    bool AddSharedIpWhitelistEntry(std::string const& normalized, std::string const& note, std::string const& addedBy);
+    bool RemoveSharedIpWhitelistEntry(std::string const& normalized);
+
     // Arena telemetry (cheat detection): raw cast/aura/position events from live
     // arena matches, written to the characters DB table enhanced_support_arena_events
     // for offline reaction-time and facing analysis. State lives in

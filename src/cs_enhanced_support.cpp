@@ -24,6 +24,7 @@
 #include "ScriptMgr.h"
 #include "StringFormat.h"
 #include "Timer.h"
+#include "WorldSession.h"
 
 #include <algorithm>
 
@@ -42,6 +43,7 @@ public:
             { "keywords",      HandleListKeywordsCommand,      SEC_GAMEMASTER, Console::Yes },
             { "weakkeywords",  HandleListWeakKeywordsCommand,  SEC_GAMEMASTER, Console::Yes },
             { "emailpatterns", HandleListEmailPatternsCommand, SEC_GAMEMASTER, Console::Yes },
+            { "ipwhitelist",   HandleListIpWhitelistCommand,   SEC_GAMEMASTER, Console::Yes },
         };
 
         static ChatCommandTable keywordTable =
@@ -62,6 +64,12 @@ public:
             { "remove", HandleEmailPatternRemoveCommand, SEC_ADMINISTRATOR, Console::Yes },
         };
 
+        static ChatCommandTable ipWhitelistTable =
+        {
+            { "add",    HandleIpWhitelistAddCommand,    SEC_ADMINISTRATOR, Console::Yes },
+            { "remove", HandleIpWhitelistRemoveCommand, SEC_ADMINISTRATOR, Console::Yes },
+        };
+
         static ChatCommandTable arenaTable =
         {
             { "matches", HandleArenaMatchesCommand, SEC_GAMEMASTER, Console::Yes },
@@ -79,6 +87,7 @@ public:
             { "keyword",      keywordTable },
             { "weakkeyword",  weakKeywordTable },
             { "emailpattern", emailPatternTable },
+            { "ipwhitelist",  ipWhitelistTable },
             { "arena",        arenaTable },
         };
 
@@ -288,6 +297,16 @@ public:
             }
         }
 
+        uint32 const sharedIpAccounts = EnhancedSupport::GetSharedIpAccounts();
+        if (sharedIpAccounts == 0)
+            handler->SendSysMessage("  Shared-IP alert: disabled");
+        else
+            handler->PSendSysMessage(
+                "  Shared-IP alert: {} accounts within {} minute(s), updated total after {} quiet minute(s), failed logins {}, {} whitelist entry(ies)",
+                sharedIpAccounts, EnhancedSupport::GetSharedIpWindowMinutes(), EnhancedSupport::GetSharedIpQuietMinutes(),
+                EnhancedSupport::GetSharedIpCountFailedLogins() ? "counted" : "not counted",
+                EnhancedSupport::GetSharedIpWhitelist().size());
+
         handler->PSendSysMessage("  Ban author: {}", EnhancedSupport::GetBanAuthor());
 
         std::string const& message = EnhancedSupport::GetMailFilterMessage();
@@ -320,7 +339,8 @@ public:
         EnhancedSupport::LoadKeywords();
         EnhancedSupport::LoadWeakKeywords();
         EnhancedSupport::LoadEmailPatterns();
-        handler->PSendSysMessage("mod-enhanced-support: configuration, keywords, weak keywords and email patterns reloaded.");
+        EnhancedSupport::LoadSharedIpWhitelist();
+        handler->PSendSysMessage("mod-enhanced-support: configuration, keywords, weak keywords, email patterns and IP whitelist reloaded.");
         return true;
     }
 
@@ -498,6 +518,74 @@ public:
 
         EnhancedSupport::RemoveEmailPattern(normalized);
         handler->PSendSysMessage("Removed email pattern: {}", normalized);
+        return true;
+    }
+
+    static bool HandleListIpWhitelistCommand(ChatHandler* handler)
+    {
+        std::vector<EnhancedSupport::SharedIpWhitelistEntry> const entries = EnhancedSupport::GetSharedIpWhitelist();
+        if (entries.empty())
+        {
+            handler->SendSysMessage("mod-enhanced-support: the shared-IP whitelist is empty.");
+            return true;
+        }
+
+        handler->PSendSysMessage("mod-enhanced-support: {} whitelisted IP(s):", entries.size());
+        for (EnhancedSupport::SharedIpWhitelistEntry const& entry : entries)
+            handler->PSendSysMessage(" - {}{} (added by {})", entry.ip,
+                entry.note.empty() ? "" : " - " + entry.note, entry.addedBy.empty() ? "unknown" : entry.addedBy);
+
+        return true;
+    }
+
+    static bool HandleIpWhitelistAddCommand(ChatHandler* handler, std::string ip, Tail note)
+    {
+        std::string normalized;
+        if (!EnhancedSupport::NormalizeSharedIpWhitelistEntry(ip, normalized))
+        {
+            handler->SendSysMessage("Usage: .support ipwhitelist add <ip | ipv4/16-32> [note]");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        std::string noteText(note);
+        noteText.erase(0, noteText.find_first_not_of(' '));
+        if (noteText.size() > 255)
+        {
+            handler->SendSysMessage("The note is limited to 255 characters.");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        std::string const addedBy = handler->GetSession() ? handler->GetSession()->GetPlayerName() : "Console";
+        if (!EnhancedSupport::AddSharedIpWhitelistEntry(normalized, noteText, addedBy))
+        {
+            handler->PSendSysMessage("Already whitelisted: {}", normalized);
+            return true;
+        }
+
+        handler->PSendSysMessage("Whitelisted for the shared-IP alert: {}", normalized);
+        return true;
+    }
+
+    static bool HandleIpWhitelistRemoveCommand(ChatHandler* handler, std::string ip)
+    {
+        std::string normalized;
+        if (!EnhancedSupport::NormalizeSharedIpWhitelistEntry(ip, normalized))
+        {
+            handler->SendSysMessage("Usage: .support ipwhitelist remove <ip | ipv4/16-32>");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        if (!EnhancedSupport::RemoveSharedIpWhitelistEntry(normalized))
+        {
+            handler->PSendSysMessage("Not whitelisted: {}", normalized);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        handler->PSendSysMessage("Removed from the shared-IP whitelist: {}", normalized);
         return true;
     }
 

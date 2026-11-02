@@ -632,7 +632,8 @@ EnhancedSupport.DormantLogin.WarnSeconds = 5
 #                     account. Detection only: nothing is blocked.
 #                     Only world logins count; a client that authenticates but never enters
 #                     the realm is not seen. Multiboxers, households and shared connections
-#                     (CGNAT, VPNs) also trip it at low values. The Discord report names the
+#                     (CGNAT, VPNs) also trip it at low values; exempt known ones with
+#                     .support ipwhitelist add <ip> [note]. The Discord report names the
 #                     IP's country as configured by DormantLogin.ShowCountry. Tracking is
 #                     in-memory and cleared on restart. Also gated by EnhancedSupport.Enable.
 #        Default:     0 - Disabled
