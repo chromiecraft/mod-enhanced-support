@@ -16,6 +16,7 @@
  */
 
 #include "EnhancedSupport.h"
+#include "Bag.h"
 #include "CharacterCache.h"
 #include "Chat.h"
 #include "DatabaseEnv.h"
@@ -32,7 +33,9 @@
 // vendor paid for the item and the materials looted from disenchanting it, then the
 // item is mailed through ItemRecovery::Restore. Destroyed rows cost nothing.
 //
-// Online characters pay from their live bags and money. Offline characters pay through
+// Materials are taken from the bags first, then the bank.
+//
+// Online characters pay from their live inventory and money. Offline characters pay through
 // a direct edit of their saved inventory, which is only safe while nothing else can
 // write it: no session on the account (a login is added on the world thread, which is
 // running this command) and a logout old enough for its save to have reached the DB.
@@ -77,20 +80,18 @@ namespace
         return cost;
     }
 
-    // Stacks of entry in the backpack and the equipped bags, the same places
-    // Player::HasItemCount looks when the bank is excluded.
-    std::vector<ItemStack> LoadSavedStacks(uint32 ownerGuid, uint32 entry)
+    // Saved stacks of entry in the bag-0 slots [itemStart, itemEnd) and inside the bags
+    // equipped in bag-0 slots [bagStart, bagEnd), appended to stacks.
+    void LoadSavedStacks(std::vector<ItemStack>& stacks, uint32 ownerGuid, uint32 entry,
+        uint8 itemStart, uint8 itemEnd, uint8 bagStart, uint8 bagEnd)
     {
-        std::vector<ItemStack> stacks;
-
         QueryResult result = CharacterDatabase.Query(
             "SELECT ii.guid, ii.count FROM character_inventory ci "
             "INNER JOIN item_instance ii ON ii.guid = ci.item "
             "WHERE ci.guid = {} AND ii.itemEntry = {} AND ("
             "(ci.bag = 0 AND ci.slot >= {} AND ci.slot < {}) OR ci.bag IN ("
             "SELECT bags.item FROM character_inventory bags WHERE bags.guid = {} AND bags.bag = 0 AND bags.slot >= {} AND bags.slot < {}))",
-            ownerGuid, entry, INVENTORY_SLOT_ITEM_START, INVENTORY_SLOT_ITEM_END,
-            ownerGuid, INVENTORY_SLOT_BAG_START, INVENTORY_SLOT_BAG_END);
+            ownerGuid, entry, itemStart, itemEnd, ownerGuid, bagStart, bagEnd);
 
         if (result)
         {
@@ -100,8 +101,31 @@ namespace
                 stacks.push_back({ fields[0].Get<uint32>(), fields[1].Get<uint32>() });
             } while (result->NextRow());
         }
+    }
 
+    // Backpack and bags first, then the bank, so carried stacks are spent before banked ones
+    std::vector<ItemStack> LoadSavedStacks(uint32 ownerGuid, uint32 entry)
+    {
+        std::vector<ItemStack> stacks;
+        LoadSavedStacks(stacks, ownerGuid, entry, INVENTORY_SLOT_ITEM_START, INVENTORY_SLOT_ITEM_END,
+            INVENTORY_SLOT_BAG_START, INVENTORY_SLOT_BAG_END);
+        LoadSavedStacks(stacks, ownerGuid, entry, BANK_SLOT_ITEM_START, BANK_SLOT_ITEM_END,
+            BANK_SLOT_BAG_START, BANK_SLOT_BAG_END);
         return stacks;
+    }
+
+    // Player::DestroyItemCount(entry, ...) never looks in the bank
+    void DestroyFromBank(Player* player, uint32 entry, uint32 count)
+    {
+        for (uint8 i = BANK_SLOT_ITEM_START; i < BANK_SLOT_ITEM_END && count; ++i)
+            if (Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i); item && item->GetEntry() == entry)
+                player->DestroyItemCount(item, count, true);
+
+        for (uint8 i = BANK_SLOT_BAG_START; i < BANK_SLOT_BAG_END && count; ++i)
+            if (Bag* bag = player->GetBagByPos(i))
+                for (uint8 j = 0; j < bag->GetBagSize() && count; ++j)
+                    if (Item* item = bag->GetItemByPos(j); item && item->GetEntry() == entry)
+                        player->DestroyItemCount(item, count, true);
     }
 
     uint32 CountStacks(std::vector<ItemStack> const& stacks)
@@ -132,7 +156,7 @@ namespace
 
         for (auto const& [entry, count] : recovery.Loot)
         {
-            uint32 const owned = player->GetItemCount(entry, false);
+            uint32 const owned = player->GetItemCount(entry, true);
             if (owned < count)
                 missing.push_back(Acore::StringFormat("{}x {} ({})", count - owned, ItemName(entry), entry));
         }
@@ -165,7 +189,11 @@ namespace
             player->ModifyMoney(-int32(recovery.Money));
 
         for (auto const& [entry, count] : recovery.Loot)
-            player->DestroyItemCount(entry, count, true);
+        {
+            uint32 const carried = std::min(count, player->GetItemCount(entry, false));
+            player->DestroyItemCount(entry, carried, true);
+            DestroyFromBank(player, entry, count - carried);
+        }
 
         ChatHandler(player->GetSession()).PSendSysMessage("Your {} has been restored and mailed to you. Paid: {}.",
             ItemName(recovery.ItemEntry), cost);
