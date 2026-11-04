@@ -78,6 +78,12 @@ public:
             { "replay",  HandleArenaReplayCommand,  SEC_GAMEMASTER, Console::Yes },
         };
 
+        static ChatCommandTable recoveryTable =
+        {
+            { "check",  HandleRecoveryCheckCommand,  SEC_ADMINISTRATOR, Console::Yes },
+            { "redeem", HandleRecoveryRedeemCommand, SEC_ADMINISTRATOR, Console::Yes },
+        };
+
         static ChatCommandTable supportTable =
         {
             { "info",         HandleInfoCommand,   SEC_GAMEMASTER,    Console::Yes },
@@ -89,6 +95,7 @@ public:
             { "emailpattern", emailPatternTable },
             { "ipwhitelist",  ipWhitelistTable },
             { "arena",        arenaTable },
+            { "recovery",     recoveryTable },
         };
 
         static ChatCommandTable commandTable =
@@ -741,6 +748,16 @@ public:
 
     // Analyzes one recorded match (running matches are analyzed from the live
     // buffer) and prints per-player reaction statistics.
+    static bool HandleRecoveryCheckCommand(ChatHandler* handler, uint32 recoveryId, PlayerIdentifier player)
+    {
+        return EnhancedSupport::RedeemRecovery(handler, recoveryId, player.GetGUID().GetCounter(), player.GetName(), false);
+    }
+
+    static bool HandleRecoveryRedeemCommand(ChatHandler* handler, uint32 recoveryId, PlayerIdentifier player)
+    {
+        return EnhancedSupport::RedeemRecovery(handler, recoveryId, player.GetGUID().GetCounter(), player.GetName(), true);
+    }
+
     static bool HandleArenaCheckCommand(ChatHandler* handler, uint32 matchId)
     {
         std::vector<EnhancedSupport::ArenaTelemetryPlayerReport> reports = EnhancedSupport::CheckArenaMatch(matchId);

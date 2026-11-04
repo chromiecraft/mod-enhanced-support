@@ -24,10 +24,17 @@
 #include <string_view>
 #include <vector>
 
+class ChatHandler;
+
 // Shared module API. State lives in mod_enhanced_support.cpp; the command
 // script (cs_enhanced_support.cpp) reaches it through these functions.
 namespace EnhancedSupport
 {
+    // Checks, or with redeem also performs, an item recovery the website sells: the
+    // character pays the row's vendor copper and disenchant materials from their bags,
+    // online or offline, and the item is mailed. Reports the outcome through handler.
+    bool RedeemRecovery(ChatHandler* handler, uint32 recoveryId, uint32 ownerGuid, std::string const& ownerName, bool redeem);
+
     void LoadConfig();
     void LoadKeywords();
 

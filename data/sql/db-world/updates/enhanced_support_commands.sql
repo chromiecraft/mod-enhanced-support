@@ -16,7 +16,10 @@ DELETE FROM `command` WHERE `name` IN (
     'support emailpattern remove',
     'support ipwhitelist',
     'support ipwhitelist add',
-    'support ipwhitelist remove'
+    'support ipwhitelist remove',
+    'support recovery',
+    'support recovery check',
+    'support recovery redeem'
 );
 
 INSERT INTO `command` (`name`, `security`, `help`) VALUES
@@ -37,4 +40,7 @@ INSERT INTO `command` (`name`, `security`, `help`) VALUES
 ('support emailpattern remove', 3, 'Syntax: .support emailpattern remove $pattern\nRemoves an email pattern.'),
 ('support ipwhitelist',         3, 'Syntax: .support ipwhitelist add|remove $ip\nManages the IPs exempt from the shared-IP alert.'),
 ('support ipwhitelist add',     3, 'Syntax: .support ipwhitelist add $ip [$note]\nExempts an IP from the shared-IP alert. $ip is an IPv4 address, an IPv4 range such as 1.2.3.0/24 (no wider than /16) or an IPv6 address. $note is optional, e.g. who shares the connection.'),
-('support ipwhitelist remove',  3, 'Syntax: .support ipwhitelist remove $ip\nRemoves an IP or range from the shared-IP whitelist.');
+('support ipwhitelist remove',  3, 'Syntax: .support ipwhitelist remove $ip\nRemoves an IP or range from the shared-IP whitelist.'),
+('support recovery',            3, 'Syntax: .support recovery check|redeem $recoveryId $character\nRedeems item recovery rows sold through the website.'),
+('support recovery check',      3, 'Syntax: .support recovery check $recoveryId $character\nReports whether $character can pay for recovery row $recoveryId: the copper a vendor paid for the item and the materials looted from disenchanting it, taken from the bags (not the bank). Works online and offline; offline needs no session on the account and a logout at least a minute old.'),
+('support recovery redeem',     3, 'Syntax: .support recovery redeem $recoveryId $character\nRuns the same checks, then takes the copper and materials and mails the item as it was recorded.');
